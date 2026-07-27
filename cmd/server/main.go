@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"distributed-job-system/internal/logger"
 	"distributed-job-system/internal/producer"
 	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/worker"
@@ -19,7 +20,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	WorkerCount := 3
+	WorkerCount := 1  //Safe number to start at
 
 	if value := os.Getenv("WORKER_COUNT"); value != "" {
 
@@ -30,9 +31,11 @@ func main() {
 	}
 	}
 
+	maxRetries, _ := strconv.Atoi(os.Getenv("MAX_RETRIES"))
+
 	for i := 1; i <= WorkerCount; i++{
 
-		w := worker.NewWorker(WorkerCount,q)
+		w := worker.NewWorker(WorkerCount,q,maxRetries)
 
 		go w.Start(ctx)
 
@@ -48,7 +51,10 @@ func main() {
 	}
 
 	go func ()  {
-		log.Println("api running on :8080")
+		logger.Log.Info(
+			"Server running",
+			"PORT",8080,
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed{
 			log.Fatal(err)
 		}
@@ -58,8 +64,12 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	<-quit
-
-	log.Println("Shutdown Signal recieved")
+	
+	shutdownSignal := <- quit
+	logger.Log.Info(
+		"Server shutdown",
+		"Shutdown_Signal",shutdownSignal,
+	)
 	cancel()
 
 	server.Shutdown(context.Background())

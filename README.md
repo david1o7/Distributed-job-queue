@@ -33,19 +33,13 @@ Future versions will introduce:
 
 ---
 
-# Current Architecture
+##System Architecture
+![Demo](image/System_disgram.jpg)
 
-```text
-                    Producer
-                       │
-                       ▼
-               Redis Job Queue
-                       │
-      ┌────────────────┼────────────────┐
-      ▼                ▼                ▼
-   Worker-1         Worker-2         Worker-3
-```
+## DEMO
+![Demo](image/Code_p6EroVcsVI.gif)
 
+![Demo2](image/image.png)
 ---
 
 # Current Features
@@ -90,7 +84,11 @@ This version introduces:
 - Better logging
 - Graceful shutdown
 - Context propagation
-
+- Added retry count tracking
+- Added configurable max retries
+- Requeue failed jobs
+- Added structured slog logging
+- Simulated job processing failures
 ---
 
 # Trade-offs (Current)
@@ -215,72 +213,6 @@ These are planned for future releases.
 
 ---
 
-# Roadmap
-
-## v0.3.0
-
-- Retry mechanism
-- Maximum retry count
-- Exponential backoff
-
----
-
-## v0.4.0
-
-- Dead Letter Queue
-- Failure tracking
-- Retry analytics
-
----
-
-## v0.5.0
-
-- Job priorities
-- Multiple queues
-- Priority scheduler
-
----
-
-## v0.6.0
-
-- Delayed jobs
-- Scheduled execution
-
----
-
-## v0.7.0
-
-- Prometheus metrics
-- Grafana dashboard
-- Queue monitoring
-
----
-
-## v0.8.0
-
-- PostgreSQL persistence
-- Job status API
-- Job history
-
----
-
-## v1.0.0
-
-- RabbitMQ backend
-- Message acknowledgements
-- Reliable delivery
-
----
-
-## v2.0.0
-
-- Kafka integration
-- Event streaming
-- Horizontal scaling
-- Docker Compose
-- Kubernetes deployment
-
----
 
 # Lessons Learned
 
