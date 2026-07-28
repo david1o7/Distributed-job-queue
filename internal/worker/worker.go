@@ -92,6 +92,7 @@ func (w *Worker) Start(ctx context.Context) {
 					RetryCount: job.RetryCount,
 					MaxRetries: w.MaxRetries,
 					CreatedAt: time.Now(),
+					NextRetry: time.Now().Add(delay),
 				}
 
 				err := w.Queue.Push(ctx,Updatedjob)
