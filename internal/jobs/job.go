@@ -12,4 +12,5 @@ type Job struct{
 	RetryCount int `json:"retry_count"`
 	MaxRetries int `json:"max_retries"`
 	CreatedAt time.Time `json:"created_at"`
+	NextRetry time.Time `json:"next_retry"`
 }

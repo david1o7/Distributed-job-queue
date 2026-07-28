@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"distributed-job-system/internal/logger"
+	"distributed-job-system/internal/metrics"
 	"distributed-job-system/internal/producer"
 	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/worker"
@@ -15,7 +16,10 @@ import (
 )
 
 func main() {
-	q := queue.NewRedisQueue("localhost:6379")
+	metrics.Init()
+	
+	REDIS_ADDR := os.Getenv("REDIS_ADDR")
+	q := queue.NewRedisQueue(REDIS_ADDR)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

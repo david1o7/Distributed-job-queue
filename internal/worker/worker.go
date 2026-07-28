@@ -7,7 +7,9 @@ import (
 
 	"distributed-job-system/internal/jobs"
 	"distributed-job-system/internal/logger"
+	"distributed-job-system/internal/metrics"
 	"distributed-job-system/internal/queue"
+	"distributed-job-system/internal/retry"
 	"log"
 	"time"
 )
@@ -68,14 +70,20 @@ func (w *Worker) Start(ctx context.Context) {
 
 			job.RetryCount++
 
+			delay := retry.CalculateBackOff(job.RetryCount)
+
 			if job.RetryCount <= w.MaxRetries {
 
-				logger.Log.Info(
-					"Retrying job",
+				metrics.JobsRetried.Inc()
+				logger.Log.Warn(
+					"Job failed, scheduling retry",
 					"worker", w.ID,
 					"job", job.ID,
 					"Total retries", job.RetryCount,
+					"retry_after",delay,
 				)
+
+				time.Sleep(delay)
 
 				Updatedjob := jobs.Job{
 					ID: job.ID,
@@ -90,7 +98,7 @@ func (w *Worker) Start(ctx context.Context) {
 
 				if err != nil {
 					logger.Log.Error(
-						"Failed to Requeue job",
+						"Failed to Enqueue job",
 						"worker", w.ID,
 						"job_id", job.ID,
 						"Error", err,
@@ -106,7 +114,7 @@ func (w *Worker) Start(ctx context.Context) {
 					"Worker", w.ID,
 					"job", job.ID,
 				)
-
+				metrics.JobsFailed.Inc()
 				continue
 			}
 
