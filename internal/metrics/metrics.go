@@ -20,11 +20,59 @@ var JobsFailed = prometheus.NewCounter(
 	},
 )
 
+var UnknownJobs = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "unknown_jobs_total",
+
+		Help: "Total unknown job types",
+
+	},
+)
+
+var JobsCompleted = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "jobs_completed_total",
+
+		Help: "Total completed job types",
+
+	},
+)
+
+var JobsProcessing = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "jobs_processed_total",
+
+		Help: "Total processed jobs types",
+
+	},
+)
+
+var JobsQueued = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "jobs_queued_total",
+
+		Help: "Total queued jobs types",
+
+	},
+)
+
 func Init(){
 
 	prometheus.MustRegister(
 		JobsRetried,
 		JobsFailed,
+		UnknownJobs,
+		JobsCompleted,
+		JobsQueued,
+		JobsProcessing,
 	)
 
 }

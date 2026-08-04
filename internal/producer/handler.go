@@ -3,6 +3,8 @@ package producer
 import (
 	"context"
 	"distributed-job-system/internal/jobs"
+	"distributed-job-system/internal/logger"
+	"distributed-job-system/internal/metrics"
 	"distributed-job-system/internal/queue"
 	"encoding/json"
 	"net/http"
@@ -30,13 +32,31 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 			ID: uuid.NewString(),
 			Type: req.Type,
 			Payload: req.Payload,
+			Status: jobs.StatusQueued,
 			RetryCount: 0,
 			MaxRetries: 3,
 			CreatedAt: time.Now(),
 		}
 
-		if err := q.Push(context.Background(), job); err != nil {
+		logger.Log.Info(
+			"incoming job id",
+			"job_id", job.ID,
+		)
+
+		metrics.JobsQueued.Inc()
+
+		ctx := context.Background()
+
+		if err := q.Push(ctx, job); err != nil {
 			http.Error(w, "failed to enqueue job", http.StatusInternalServerError)
+			return
+		}
+
+		err := q.SaveJob(ctx, job)
+
+		if err != nil {
+			http.Error(w,"failed to save job",http.StatusInternalServerError)
+
 			return
 		}
 
@@ -45,5 +65,6 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 			"job_id": job.ID,
 			"status": "queued",
 		})
+
 	}
 }

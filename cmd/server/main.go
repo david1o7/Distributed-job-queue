@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"distributed-job-system/internal/handlers"
 	"distributed-job-system/internal/logger"
 	"distributed-job-system/internal/metrics"
 	"distributed-job-system/internal/producer"
@@ -21,10 +22,14 @@ func main() {
 	REDIS_ADDR := os.Getenv("REDIS_ADDR")
 	q := queue.NewRedisQueue(REDIS_ADDR)
 
+	registry := worker.NewRegistry()
+
+	registry.Register("print", &worker.PrintHandler{})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	WorkerCount := 1  //Safe number to start at
+	WorkerCount := 1  //Safe number to start at if the .env isnt able to load 
 
 	if value := os.Getenv("WORKER_COUNT"); value != "" {
 
@@ -41,13 +46,14 @@ func main() {
 
 		w := worker.NewWorker(WorkerCount,q,maxRetries)
 
-		go w.Start(ctx)
+		go w.Start(ctx, registry)
 
 	}
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /jobs", producer.Handler(q))
+	mux.HandleFunc("/jobs/",handlers.GetJobHandler(q))
 
 	server := &http.Server{
 		Addr: ":8080",

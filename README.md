@@ -2,26 +2,24 @@
 
 > **Version:** `v0.2.0`
 
-A production-inspired distributed job queue built in Go.
+A production-inspired distributed job queue built with Go.
 
-This project is my journey into distributed systems and backend engineering. Rather than jumping straight into Kafka or RabbitMQ, I'm building the core concepts from scratch to understand **why** production systems are designed the way they are.
+Instead of jumping straight into Kafka or RabbitMQ, I'm rebuilding the core concepts from scratch to understand *why* modern message brokers are designed the way they are.
 
-The goal isn't to clone an existing message broker.
-
-The goal is to understand the engineering decisions behind them.
+The goal isn't to clone existing tools—it's to learn the engineering behind them.
 
 ---
 
-## Tech Stack
+# Tech Stack
 
 - Go
 - Redis
 - Docker
-- Context API
 - Goroutines
-- Worker Pools
+- Context
+- slog
 
-Future versions will introduce:
+### Planned
 
 - RabbitMQ
 - Kafka
@@ -33,26 +31,45 @@ Future versions will introduce:
 
 ---
 
-##System Architecture
-![Demo](image/System_disgram.jpg)
+# Architecture
 
-## DEMO
-![Demo](image/Code_p6EroVcsVI.gif)
+![System Architecture](image/System_disgram.jpg)
 
-![Demo2](image/image.png)
 ---
 
-# Current Features
+# Demo
 
-- Produce asynchronous jobs
+![Demo](image/Code_p6EroVcsVI.gif)
+
+![Demo](image/image.png)
+
+---
+
+# Features
+
+### Current
+
 - Redis-backed queue
-- Worker pool
+- Concurrent worker pool
 - Configurable worker count
-- Concurrent job processing
+- Retry mechanism
+- Exponential backoff
 - Graceful shutdown
 - Context cancellation
-- Structured worker logging
-- Environment configuration
+- Structured logging (`slog`)
+- Job status endpoint (`GET /jobs/{id}`)
+- Job persistence in Redis
+
+### Coming Soon
+
+- Dead Letter Queue (DLQ)
+- Delayed jobs
+- Scheduled jobs
+- Job priorities
+- Queue metrics
+- Worker health checks
+- Kafka integration
+- RabbitMQ integration
 
 ---
 
@@ -66,187 +83,93 @@ I wanted to understand what actually happens behind systems like:
 - BullMQ
 - Sidekiq
 
-Instead of treating them like magic, I'm rebuilding many of their ideas from scratch.
-
-Every version of this project solves one new engineering problem.
+Instead of treating them as black boxes, I'm rebuilding many of their core ideas one feature at a time.
 
 ---
 
-# Current Version
+# What I've Learned
 
-## v0.2.0
+This project has taught me about:
 
-This version introduces:
-
-- Multiple concurrent workers
-- Worker IDs
-- Configurable worker pool
-- Better logging
-- Graceful shutdown
+- Worker pools
+- Redis queues
+- Concurrency
 - Context propagation
-- Added retry count tracking
-- Added configurable max retries
-- Requeue failed jobs
-- Added structured slog logging
-- Simulated job processing failures
+- Retry strategies
+- Graceful shutdown
+- Production logging
+- Distributed systems fundamentals
+
 ---
 
-# Trade-offs (Current)
+# Debugging Breakthroughs
+
+This project has probably taught me more through debugging than coding.
+
+### Job Status Bug
+
+One of my biggest debugging moments came when `GET /jobs/{id}` kept returning **"job not found."**
+
+At first I thought Redis wasn't saving the jobs correctly.
+
+After tracing the request flow, I realized the issue was with how job metadata and IDs were being stored and retrieved.
+
+That bug helped me better understand how separating the **queue** from the **job store** works.
+
+---
+
+### Retry Logic
+
+Another bug caused jobs to fail permanently instead of retrying.
+
+The problem wasn't Redis.
+
+It was my retry logic and how job state was being updated after failures.
+
+Fixing it helped me understand why production retry systems carefully track job state.
+
+---
+
+### Concurrency
+
+Watching multiple workers consume jobs at the same time made debugging much harder.
+
+Logs started appearing out of order, which forced me to rely on structured logging with worker IDs instead of simple print statements.
+
+---
+
+# Current Trade-offs
 
 Every design has trade-offs.
 
-These are the ones I've intentionally accepted so far.
+Current compromises include:
 
-### Single Redis Queue
+- Single Redis queue
+- No acknowledgements
+- No worker crash recovery
+- No Dead Letter Queue
+- FIFO scheduling only
+- Fire-and-forget producer
 
-Every job enters one queue.
-
-**Pros**
-
-- Very simple
-- Easy to debug
-- Easy to reason about
-
-**Cons**
-
-- Long-running jobs can block smaller jobs.
-- No prioritization.
+These limitations are intentional and will be addressed incrementally in future versions.
 
 ---
 
-### Redis Lists
+# Roadmap
 
-Using `LPUSH` + `BRPOP`.
+The long-term goal is to evolve this project into a production-grade distributed system by adding:
 
-**Pros**
+- Dead Letter Queues
+- Queue metrics
+- Prometheus
+- Grafana
+- PostgreSQL
+- RabbitMQ
+- Kafka
+- Kubernetes
+- Distributed workers
 
-- Fast
-- Lightweight
-- Perfect for learning
-
-**Cons**
-
-- No acknowledgements.
-- Jobs can be lost if a worker crashes after dequeuing.
-
----
-
-### FIFO Processing
-
-Jobs are processed in arrival order.
-
-**Pros**
-
-- Predictable
-- Easy implementation
-
-**Cons**
-
-- Urgent jobs cannot skip the queue.
-
----
-
-### Worker Pool
-
-Multiple workers consume jobs concurrently.
-
-**Pros**
-
-- Higher throughput
-- Better CPU utilization
-- Scales easily
-
-**Cons**
-
-- Concurrent logs
-- More difficult debugging
-- Potential race conditions if shared state is introduced later
-
----
-
-### Fire-and-Forget
-
-The producer immediately returns after enqueueing.
-
-**Pros**
-
-- Fast API response
-
-**Cons**
-
-- Clients don't know when work finishes.
-
----
-
-# Edge Cases Handled
-
-- Multiple workers consuming simultaneously
-- Empty queue
-- Graceful server shutdown
-- Context cancellation
-- Configurable worker count
-- Invalid worker count configuration
-- Logging worker identity
-- Worker waiting efficiently using blocking operations
-
----
-
-# Edge Cases Not Yet Handled
-
-These are planned for future releases.
-
-- Retry mechanism
-- Dead Letter Queue (DLQ)
-- Worker crash recovery
-- Job acknowledgements
-- Delayed jobs
-- Scheduled jobs
-- Job priorities
-- Queue persistence
-- Idempotency
-- Duplicate job detection
-- Retry backoff
-- Queue monitoring
-- Failed job analytics
-- Worker health monitoring
-- Queue length metrics
-
----
-
-
-# Lessons Learned
-
-So far this project has taught me about:
-
-- Goroutines
-- Worker pools
-- Context propagation
-- Concurrent processing
-- Redis as a queue
-- Graceful shutdown
-- Distributed systems fundamentals
-- Production trade-offs
-
----
-
-# This Is Only The Beginning
-
-This repository is intentionally versioned because I plan to continuously evolve it.
-
-Rather than abandoning projects after they're "working", I want this to become a long-term engineering project where every release introduces another production concept.
-
-The goal is to eventually build something that demonstrates:
-
-- distributed systems
-- observability
-- reliability
-- fault tolerance
-- scalability
-- production engineering
-
-Version **0.2.0** is only the foundation.
-
-There's a long roadmap ahead, and each version will bring this project one step closer to a production-grade distributed job system.
+Each version introduces one major production concept instead of trying to build everything at once.
 
 ---
 
@@ -264,8 +187,10 @@ go run ./cmd/server
 
 ---
 
-# Future Vision
+# Final Thoughts
 
-By the end of this project, I want to understand—not just use—the ideas behind modern distributed systems.
+This project isn't about building another queue.
 
-Whether it's RabbitMQ, Kafka, or cloud-native queue services, the goal is to build the intuition first and then apply those concepts to production technologies.
+It's about understanding how distributed systems are designed, why they fail, and how production services recover from those failures.
+
+Every version represents another step toward building a production-grade job processing system.
