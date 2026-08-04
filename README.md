@@ -41,7 +41,7 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 
 ![Demo](image/Code_p6EroVcsVI.gif)
 
-![Demo](image/image.png)
+![Demo](image/image1.png)
 
 ---
 
