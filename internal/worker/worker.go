@@ -78,8 +78,9 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 			return
 		}
 
-		err = registry.Execute(ctx, Recievedjob)
-		if err != nil {
+		err1 := registry.Execute(ctx, Recievedjob)
+
+		if err1 != nil {
 
 			logger.Log.Error(
 				"Job execution failed",
@@ -91,7 +92,7 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 			Recievedjob.RetryCount++
 		}
 
-		if err != nil {
+		if err1 != nil {
 
 			Recievedjob.RetryCount++
 
@@ -167,13 +168,55 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 					return
 				}
 
+				deadJob := jobs.DeadJob{
+
+						Job: jobs.Job{
+
+							ID: Recievedjob.ID,
+
+							Type: Recievedjob.Type,
+
+							Payload: Recievedjob.Payload,
+
+							Status: Recievedjob.Status,
+
+							RetryCount: Recievedjob.RetryCount,
+
+							MaxRetries: w.MaxRetries,
+
+							CreatedAt: Recievedjob.CreatedAt,
+						},
+
+						FailureReason: err1.Error(),
+
+						FailedAt: time.Now(),
+				}
+
+				
 
 				logger.Log.Error(
-					"job Permanently failed",
-					"Worker", w.ID,
-					"job", Recievedjob.ID,
-					"Status", Recievedjob.Status,
+					"job moved to dead letter queue",
+
+					"worker", w.ID,
+
+					"job_id", Recievedjob.ID,
+
+					"retry_count", Recievedjob.RetryCount,
+
+					"reason", err1.Error(),
 				)
+
+				if err := w.Queue.MoveToDeadLetter(ctx, deadJob); err != nil{
+
+					logger.Log.Error(
+						"failed moving job to DLQ",
+						"job", Recievedjob.ID,
+						"error", err,
+					)
+					continue
+				}
+
+				metrics.JobsDeadLetter.Inc()
 				
 				continue
 			}

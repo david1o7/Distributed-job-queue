@@ -37,7 +37,8 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 
 ---
 
-# Demo
+# Demo (DLQ ENDPOINT, CODE EXECUTING GIF, TESTED JOBS ENDPOINT )
+![Demo](image/dead-jobs.jpg) 
 
 ![Demo](image/Code_p6EroVcsVI.gif)
 
@@ -59,10 +60,11 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 - Structured logging (`slog`)
 - Job status endpoint (`GET /jobs/{id}`)
 - Job persistence in Redis
+- Dead Letter Queue (DLQ)
+- Dead Letter Queue endpoint (`GET /dead-jobs`)
 
 ### Coming Soon
 
-- Dead Letter Queue (DLQ)
 - Delayed jobs
 - Scheduled jobs
 - Job priorities
@@ -99,6 +101,7 @@ This project has taught me about:
 - Graceful shutdown
 - Production logging
 - Distributed systems fundamentals
+-investigating of production issues
 
 ---
 
@@ -147,9 +150,9 @@ Current compromises include:
 - Single Redis queue
 - No acknowledgements
 - No worker crash recovery
-- No Dead Letter Queue
 - FIFO scheduling only
 - Fire-and-forget producer
+- DLQ Endpoint pulls the entire DLQ lists content
 
 These limitations are intentional and will be addressed incrementally in future versions.
 
@@ -159,7 +162,6 @@ These limitations are intentional and will be addressed incrementally in future 
 
 The long-term goal is to evolve this project into a production-grade distributed system by adding:
 
-- Dead Letter Queues
 - Queue metrics
 - Prometheus
 - Grafana

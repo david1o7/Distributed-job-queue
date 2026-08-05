@@ -17,6 +17,10 @@ type Queue interface {
     SaveJob(ctx context.Context, job jobs.Job) error
 
     GetJob(ctx context.Context, id string) (*jobs.Job, error)
+
+	MoveToDeadLetter(ctx context.Context,job jobs.DeadJob) error
+
+	ListDeadJobs(ctx context.Context) ([]jobs.DeadJob, error)
 }
 
 type RedisQueue struct{
@@ -96,4 +100,46 @@ func (q *RedisQueue) GetJob(ctx context.Context, id string,) (*jobs.Job, error) 
     }
 
     return &job, nil
+}
+
+func (q *RedisQueue) MoveToDeadLetter(ctx context.Context, job jobs.DeadJob) error{
+	data, err := json.Marshal(job)
+
+	if err != nil{
+		return err
+	}
+
+	return q.client.LPush(
+		ctx,
+		"dead_job",
+		data,
+	).Err()
+
+}
+
+func (q *RedisQueue) ListDeadJobs(ctx context.Context) ([]jobs.DeadJob, error){
+	values, err := q.client.LRange(
+		ctx,
+		"dead_job",
+		0,
+		-1,
+	).Result()
+	
+	if err != nil{
+		return nil, err
+	}
+
+	deadjobs := make([]jobs.DeadJob, 0, len(values))
+
+	for _, value := range values {
+		var job jobs.DeadJob
+
+		if err := json.Unmarshal([]byte(value), &job); err != nil{
+			continue
+		}
+
+		deadjobs = append(deadjobs, job)
+	}
+
+	return deadjobs, nil
 }

@@ -64,6 +64,16 @@ var JobsQueued = prometheus.NewCounter(
 	},
 )
 
+var JobsDeadLetter = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "jobs_dead_letter_total",
+
+		Help: "Total jobs moved to dead letter queue",
+	},
+)
+
 func Init(){
 
 	prometheus.MustRegister(
@@ -73,6 +83,7 @@ func Init(){
 		JobsCompleted,
 		JobsQueued,
 		JobsProcessing,
+		JobsDeadLetter,
 	)
 
 }
