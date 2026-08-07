@@ -62,6 +62,7 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 - Job persistence in Redis
 - Dead Letter Queue (DLQ)
 - Dead Letter Queue endpoint (`GET /dead-jobs`)
+- Replay of Dead Jobs (`POST /dead-jobs/{id}/replay`)
 
 ### Coming Soon
 
@@ -101,7 +102,9 @@ This project has taught me about:
 - Graceful shutdown
 - Production logging
 - Distributed systems fundamentals
--investigating of production issues
+- investigating of production issues
+- Limitations of using a Redis List for a DLQ
+- Non Atomicity during Replay of Dead Jobs
 
 ---
 
@@ -153,6 +156,7 @@ Current compromises include:
 - FIFO scheduling only
 - Fire-and-forget producer
 - DLQ Endpoint pulls the entire DLQ lists content
+- Non Atomicity of Dead job replay
 
 These limitations are intentional and will be addressed incrementally in future versions.
 

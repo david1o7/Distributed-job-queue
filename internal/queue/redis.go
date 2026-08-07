@@ -4,6 +4,7 @@ import (
 	"context"
 	"distributed-job-system/internal/jobs"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -21,6 +22,8 @@ type Queue interface {
 	MoveToDeadLetter(ctx context.Context,job jobs.DeadJob) error
 
 	ListDeadJobs(ctx context.Context) ([]jobs.DeadJob, error)
+
+	ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, error)
 }
 
 type RedisQueue struct{
@@ -142,4 +145,64 @@ func (q *RedisQueue) ListDeadJobs(ctx context.Context) ([]jobs.DeadJob, error){
 	}
 
 	return deadjobs, nil
+}
+
+func (q * RedisQueue) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, error){
+	values, err := q.client.LRange(
+		ctx,
+		"dead_job",
+		0,
+		-1,
+	).Result()
+
+	if err != nil{
+		return nil, err
+	}
+
+	for _, value := range values{
+		var deadJob jobs.DeadJob
+		
+		if err := json.Unmarshal([]byte(value), &deadJob); err != nil{
+			continue
+		}
+
+		if deadJob.ID != id{
+			continue
+		}
+
+		job := deadJob.Job
+
+		job.Status = jobs.StatusQueued
+		job.RetryCount = 0
+		job.NextRetry = time.Time{}
+
+		if err := q.Push(ctx, job); err != nil{
+			return nil, err
+		}
+
+		remove, err := q.client.LRem(
+			ctx,
+			"dead_job",
+			1,
+			value,
+		).Result()
+
+		if err != nil{
+			return nil, err
+		}
+
+		if remove == 0{
+			return nil, fmt.Errorf(
+				"job %s could not be removed from DLQ", id,
+			)
+		}
+
+		if err := q.SaveJob(ctx, job); err != nil{
+			return nil, err
+		}
+		
+		return &job, nil
+	}
+
+	return nil, redis.Nil
 }

@@ -55,6 +55,7 @@ func main() {
 	mux.HandleFunc("/jobs", producer.Handler(q))
 	mux.HandleFunc("/jobs/",handlers.GetJobHandler(q))
 	mux.HandleFunc("/dead-jobs",handlers.DeadJobHandler(q))
+	mux.HandleFunc("/dead-jobs/{id}/replay",handlers.ReplayDeadJobHandler(q))
 
 	server := &http.Server{
 		Addr: ":8080",
