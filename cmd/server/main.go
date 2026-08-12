@@ -18,7 +18,7 @@ import (
 
 func main() {
 	metrics.Init()
-	
+
 	REDIS_ADDR := os.Getenv("REDIS_ADDR")
 	q := queue.NewRedisQueue(REDIS_ADDR)
 
@@ -29,22 +29,22 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	WorkerCount := 1  //Safe number to start at if the .env isnt able to load 
+	WorkerCount := 1 //Safe number to start at if the .env isnt able to load
 
 	if value := os.Getenv("WORKER_COUNT"); value != "" {
 
-	n, err := strconv.Atoi(value)
+		n, err := strconv.Atoi(value)
 
-	if err == nil && n > 0 {
-		WorkerCount = n
-	}
+		if err == nil && n > 0 {
+			WorkerCount = n
+		}
 	}
 
 	maxRetries, _ := strconv.Atoi(os.Getenv("MAX_RETRIES"))
 
-	for i := 1; i <= WorkerCount; i++{
+	for i := 1; i <= WorkerCount; i++ {
 
-		w := worker.NewWorker(WorkerCount,q,maxRetries)
+		w := worker.NewWorker(i, q, maxRetries)
 
 		go w.Start(ctx, registry)
 
@@ -53,21 +53,21 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/jobs", producer.Handler(q))
-	mux.HandleFunc("/jobs/",handlers.GetJobHandler(q))
-	mux.HandleFunc("/dead-jobs",handlers.DeadJobHandler(q))
-	mux.HandleFunc("/dead-jobs/{id}/replay",handlers.ReplayDeadJobHandler(q))
+	mux.HandleFunc("/jobs/", handlers.GetJobHandler(q))
+	mux.HandleFunc("/dead-jobs", handlers.DeadJobHandler(q))
+	mux.HandleFunc("/dead-jobs/{id}/replay", handlers.ReplayDeadJobHandler(q))
 
 	server := &http.Server{
-		Addr: ":8080",
+		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	go func ()  {
+	go func() {
 		logger.Log.Info(
 			"Server running",
-			"PORT",8080,
+			"PORT", 8080,
 		)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed{
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()
@@ -75,14 +75,19 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
-	<-quit
-	
-	shutdownSignal := <- quit
+	shutdownSignal := <-quit
+
 	logger.Log.Info(
 		"Server shutdown",
-		"Shutdown_Signal",shutdownSignal,
+		"shutdown_signal", shutdownSignal,
 	)
+
 	cancel()
 
-	server.Shutdown(context.Background())
+	if err := server.Shutdown(context.Background()); err != nil {
+		logger.Log.Error(
+			"Server shutdown failed",
+			"error", err,
+		)
+	}
 }

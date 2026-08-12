@@ -10,7 +10,7 @@ import (
 )
 
 func DeadJobHandler(q *queue.RedisQueue) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request){
+	return func(w http.ResponseWriter, r *http.Request) {
 		jobs, err := q.ListDeadJobs(r.Context())
 
 		if err != nil {
@@ -27,19 +27,19 @@ func DeadJobHandler(q *queue.RedisQueue) http.HandlerFunc {
 	}
 }
 
-func ReplayDeadJobHandler(q *queue.RedisQueue,) http.HandlerFunc {
-	return func (w http.ResponseWriter, r *http.Request) {
+func ReplayDeadJobHandler(q *queue.RedisQueue) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 
-		if id == ""{
+		if id == "" {
 			http.Error(w, "missing job id", http.StatusBadRequest)
-			return 
+			return
 		}
 
 		job, err := q.ReplayDeadJob(r.Context(), id)
 
-		if err != nil{
-			if errors.Is(err, redis.Nil){
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
 				http.Error(w, "dead job not found", http.StatusNotFound)
 
 				return

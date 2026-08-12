@@ -13,14 +13,14 @@ import (
 	"github.com/google/uuid"
 )
 
-type CreateJobRequest struct{
-	Type string `json:"type"`
+type CreateJobRequest struct {
+	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 }
 
 func Handler(q *queue.RedisQueue) http.HandlerFunc {
 
-	return func(w http.ResponseWriter,r *http.Request){
+	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateJobRequest
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -29,13 +29,13 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 		}
 
 		job := jobs.Job{
-			ID: uuid.NewString(),
-			Type: req.Type,
-			Payload: req.Payload,
-			Status: jobs.StatusQueued,
+			ID:         uuid.NewString(),
+			Type:       req.Type,
+			Payload:    req.Payload,
+			Status:     jobs.StatusQueued,
 			RetryCount: 0,
 			MaxRetries: 3,
-			CreatedAt: time.Now(),
+			CreatedAt:  time.Now(),
 		}
 
 		logger.Log.Info(
@@ -55,7 +55,7 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 		err := q.SaveJob(ctx, job)
 
 		if err != nil {
-			http.Error(w,"failed to save job",http.StatusInternalServerError)
+			http.Error(w, "failed to save job", http.StatusInternalServerError)
 
 			return
 		}

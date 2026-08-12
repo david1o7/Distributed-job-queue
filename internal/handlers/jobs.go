@@ -1,54 +1,54 @@
 package handlers
 
 import (
-    "encoding/json"
-    "net/http"
-    "strings"
+	"encoding/json"
+	"net/http"
+	"strings"
 
-    "distributed-job-system/internal/queue"
+	"distributed-job-system/internal/queue"
 )
 
 func GetJobHandler(q *queue.RedisQueue) http.HandlerFunc {
 
-    return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 
-        id := strings.TrimPrefix(
-            r.URL.Path,
-            "/jobs/",
-        )
+		id := strings.TrimPrefix(
+			r.URL.Path,
+			"/jobs/",
+		)
 
-        if id == "" {
+		if id == "" {
 
-            http.Error(
-                w,
-                "missing id",
-                http.StatusBadRequest,
-            )
+			http.Error(
+				w,
+				"missing id",
+				http.StatusBadRequest,
+			)
 
-            return
-        }
+			return
+		}
 
-        job, err := q.GetJob(
-            r.Context(),
-            id,
-        )
+		job, err := q.GetJob(
+			r.Context(),
+			id,
+		)
 
-        if err != nil {
+		if err != nil {
 
-            http.Error(
-                w,
-                "job not found",
-                http.StatusNotFound,
-            )
+			http.Error(
+				w,
+				"job not found",
+				http.StatusNotFound,
+			)
 
-            return
-        }
+			return
+		}
 
-        w.Header().Set(
-            "Content-Type",
-            "application/json",
-        )
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
+		)
 
-        json.NewEncoder(w).Encode(job)
-    }
+		json.NewEncoder(w).Encode(job)
+	}
 }

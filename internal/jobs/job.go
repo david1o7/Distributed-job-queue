@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-type Job struct{
-	ID  string `json:"id"`
-	Type string `json:"type"`
+type Job struct {
+	ID      string          `json:"id"`
+	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 
 	Status Status `json:"status"`
@@ -22,9 +22,9 @@ type Job struct{
 type Status string
 
 const (
-	StatusQueued Status = "queued"
+	StatusQueued     Status = "queued"
 	StatusProcessing Status = "processing"
-	StatusRetrying Status = "retrying"
-	StatusCompleted Status = "completed"
-	StatusFailed Status = "failed"
+	StatusRetrying   Status = "retrying"
+	StatusCompleted  Status = "completed"
+	StatusFailed     Status = "failed"
 )

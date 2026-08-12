@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 )
+
 type PrintHandler struct{}
 
 func (p *PrintHandler) Handle(ctx context.Context, job jobs.Job) error {
@@ -17,7 +18,7 @@ func (p *PrintHandler) Handle(ctx context.Context, job jobs.Job) error {
 		"payload", string(job.Payload),
 	)
 
-	type payload struct{
+	type payload struct {
 		Name string `json:"name"`
 	}
 

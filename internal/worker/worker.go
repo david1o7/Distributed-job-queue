@@ -12,25 +12,24 @@ import (
 	"distributed-job-system/internal/retry"
 	"log"
 	"time"
-
-
 )
 
-type Worker struct{
-	ID int
-	Queue *queue.RedisQueue
+type Worker struct {
+	ID         int
+	Queue      *queue.RedisQueue
 	MaxRetries int
 }
-func NewWorker(id int,q *queue.RedisQueue,maxRetries int) *Worker {
 
-    return &Worker{
-        ID: id,
-        Queue: q,
-        MaxRetries: maxRetries,
-    }
+func NewWorker(id int, q *queue.RedisQueue, maxRetries int) *Worker {
+
+	return &Worker{
+		ID:         id,
+		Queue:      q,
+		MaxRetries: maxRetries,
+	}
 }
 
-func (w *Worker) Start(ctx context.Context,  registry *Registry) {
+func (w *Worker) Start(ctx context.Context, registry *Registry) {
 
 	logger.Log.Info(
 		"Worker started",
@@ -46,98 +45,104 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 			return
 
 		default:
-		job, err := w.Queue.Pop(ctx)
+			job, err := w.Queue.Pop(ctx)
 
-		if err != nil {
-			logger.Log.Error(
-				"Failed to pop job",
-				"worker",w.ID,
-				"error",err,
-			)
-			continue
-		}
+			if err != nil {
+				logger.Log.Error(
+					"Failed to pop job",
+					"worker", w.ID,
+					"error", err,
+				)
+				continue
+			}
 
-		Recievedjob := jobs.Job{
-			ID: job.ID,
-			Type: job.Type,
-			Payload: job.Payload,
-			Status: jobs.StatusProcessing,
-			RetryCount: job.RetryCount,
-			MaxRetries: w.MaxRetries,
-			CreatedAt: time.Now(),
-		}
+			Recievedjob := jobs.Job{
+				ID:         job.ID,
+				Type:       job.Type,
+				Payload:    job.Payload,
+				Status:     jobs.StatusProcessing,
+				RetryCount: job.RetryCount,
+				MaxRetries: w.MaxRetries,
+				CreatedAt:  time.Now(),
+			}
 
-		err = w.Queue.SaveJob(ctx, Recievedjob)
+			err = w.Queue.SaveJob(ctx, Recievedjob)
 
-		if err != nil {
-			logger.Log.Error(
-				"Failed to Save job",
-				"Job ID",Recievedjob.ID,
-				"error",err,
-			)
-			return
-		}
+			if err != nil {
+				logger.Log.Error(
+					"Failed to Save job",
+					"Job ID", Recievedjob.ID,
+					"error", err,
+				)
+				return
+			}
 
-		err1 := registry.Execute(ctx, Recievedjob)
+			err1 := registry.Execute(ctx, Recievedjob)
 
-		if err1 != nil {
+			if err1 != nil {
 
-			logger.Log.Error(
-				"Job execution failed",
-				"worker", w.ID,
-				"job", Recievedjob.ID,
-				"error", err,
-			)
-
-			Recievedjob.RetryCount++
-		}
-
-		if err1 != nil {
-
-			Recievedjob.RetryCount++
-
-			delay := retry.CalculateBackOff(Recievedjob.RetryCount)
-
-			if Recievedjob.RetryCount <= w.MaxRetries {
-
-				metrics.JobsRetried.Inc()
-
-				logger.Log.Warn(
-					"Job failed, scheduling retry",
+				logger.Log.Error(
+					"Job execution failed",
 					"worker", w.ID,
 					"job", Recievedjob.ID,
-					"Total retries", Recievedjob.RetryCount,
-					"retry_after",delay,
-					"Status", Recievedjob.Status,
+					"error", err,
 				)
+			}
 
-				time.Sleep(delay)
+			if err1 != nil {
 
-				Recievedjob.NextRetry = time.Time{}.Add(delay)
-				Recievedjob.Status = jobs.StatusRetrying
+				Recievedjob.RetryCount++
 
-				err = w.Queue.SaveJob(ctx, Recievedjob)
+				delay := retry.CalculateBackOff(Recievedjob.RetryCount)
 
-				if err != nil {
-					logger.Log.Error(
-						"Failed to Save job",
-						"Job ID",Recievedjob.ID,
-						"error",err,
-					)
-					return
-				}
+				if Recievedjob.RetryCount <= w.MaxRetries {
 
-				err := w.Queue.Push(ctx,Recievedjob)
+					metrics.JobsRetried.Inc()
 
-				if err != nil {
-					logger.Log.Error(
-						"Failed to Enqueue job",
+					logger.Log.Warn(
+						"Job failed, scheduling retry",
 						"worker", w.ID,
-						"job_id", Recievedjob.ID,
-						"Error", err,
+						"job", Recievedjob.ID,
+						"Total retries", Recievedjob.RetryCount,
+						"retry_after", delay,
+						"Status", Recievedjob.Status,
 					)
-					continue
-				}
+
+					Recievedjob.NextRetry = time.Now().Add(delay)
+					Recievedjob.Status = jobs.StatusRetrying
+
+					timer := time.NewTimer(delay)
+					defer timer.Stop()
+
+					select {
+					case <-ctx.Done():
+						return
+
+					case <-timer.C:
+					}
+
+					err = w.Queue.SaveJob(ctx, Recievedjob)
+
+					if err != nil {
+						logger.Log.Error(
+							"Failed to Save job",
+							"Job ID", Recievedjob.ID,
+							"error", err,
+						)
+						return
+					}
+
+					err := w.Queue.Push(ctx, Recievedjob)
+
+					if err != nil {
+						logger.Log.Error(
+							"Failed to Enqueue job",
+							"worker", w.ID,
+							"job_id", Recievedjob.ID,
+							"Error", err,
+						)
+						continue
+					}
 
 					continue
 				}
@@ -147,8 +152,8 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 				if err != nil {
 					logger.Log.Error(
 						"Failed to Save job",
-						"Job ID",Recievedjob.ID,
-						"error",err,
+						"Job ID", Recievedjob.ID,
+						"error", err,
 					)
 					return
 				}
@@ -162,37 +167,35 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 				if err != nil {
 					logger.Log.Error(
 						"Failed to Save job",
-						"Job ID",Recievedjob.ID,
-						"error",err,
+						"Job ID", Recievedjob.ID,
+						"error", err,
 					)
 					return
 				}
 
 				deadJob := jobs.DeadJob{
 
-						Job: jobs.Job{
+					Job: jobs.Job{
 
-							ID: Recievedjob.ID,
+						ID: Recievedjob.ID,
 
-							Type: Recievedjob.Type,
+						Type: Recievedjob.Type,
 
-							Payload: Recievedjob.Payload,
+						Payload: Recievedjob.Payload,
 
-							Status: Recievedjob.Status,
+						Status: Recievedjob.Status,
 
-							RetryCount: Recievedjob.RetryCount,
+						RetryCount: Recievedjob.RetryCount,
 
-							MaxRetries: w.MaxRetries,
+						MaxRetries: w.MaxRetries,
 
-							CreatedAt: Recievedjob.CreatedAt,
-						},
+						CreatedAt: Recievedjob.CreatedAt,
+					},
 
-						FailureReason: err1.Error(),
+					FailureReason: err1.Error(),
 
-						FailedAt: time.Now(),
+					FailedAt: time.Now(),
 				}
-
-				
 
 				logger.Log.Error(
 					"job moved to dead letter queue",
@@ -206,7 +209,7 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 					"reason", err1.Error(),
 				)
 
-				if err := w.Queue.MoveToDeadLetter(ctx, deadJob); err != nil{
+				if err := w.Queue.MoveToDeadLetter(ctx, deadJob); err != nil {
 
 					logger.Log.Error(
 						"failed moving job to DLQ",
@@ -217,7 +220,7 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 				}
 
 				metrics.JobsDeadLetter.Inc()
-				
+
 				continue
 			}
 			Recievedjob.Status = jobs.StatusCompleted
@@ -226,14 +229,14 @@ func (w *Worker) Start(ctx context.Context,  registry *Registry) {
 
 			err = w.Queue.SaveJob(ctx, Recievedjob)
 
-				if err != nil {
-					logger.Log.Error(
-						"Failed to Save job",
-						"Job ID",Recievedjob.ID,
-						"error",err,
-					)
-					return
-				}
+			if err != nil {
+				logger.Log.Error(
+					"Failed to Save job",
+					"Job ID", Recievedjob.ID,
+					"error", err,
+				)
+				return
+			}
 
 			logger.Log.Info(
 				"job processed succesful",
