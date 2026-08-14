@@ -59,10 +59,14 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
+
+		if err := json.NewEncoder(w).Encode(map[string]string{
 			"job_id": job.ID,
 			"status": "queued",
-		})
+		}); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
 
 	}
 }
