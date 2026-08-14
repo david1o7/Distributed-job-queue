@@ -49,6 +49,9 @@ func GetJobHandler(q *queue.RedisQueue) http.HandlerFunc {
 			"application/json",
 		)
 
-		json.NewEncoder(w).Encode(job)
+		if err := json.NewEncoder(w).Encode(job); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	}
 }
