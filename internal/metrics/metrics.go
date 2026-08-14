@@ -68,6 +68,16 @@ var JobsDeadLetter = prometheus.NewCounter(
 	},
 )
 
+var JobsReaped = prometheus.NewCounter(
+
+	prometheus.CounterOpts{
+
+		Name: "jobs_reaped_total",
+
+		Help: "Total jobs reaped after visibility timeout expired",
+	},
+)
+
 func Init() {
 
 	prometheus.MustRegister(
@@ -78,6 +88,7 @@ func Init() {
 		JobsQueued,
 		JobsProcessing,
 		JobsDeadLetter,
+		JobsReaped,
 	)
 
 }

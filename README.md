@@ -1,16 +1,14 @@
 # Distributed Job Queue
 
-> **Version:** `v0.2.0`
+ **Version:** `v0.2.0`
 
-A production-inspired distributed job queue built with Go.
-
-Instead of jumping straight into Kafka or RabbitMQ, I'm rebuilding the core concepts from scratch to understand *why* modern message brokers are designed the way they are.
+This is an Engineering Sandbox of a production-inspired distributed job queue built with Go.
 
 The goal isn't to clone existing tools—it's to learn the engineering behind them.
 
 ---
 
-# Tech Stack
+## Tech Stack
 
 - Go
 - Redis
@@ -63,6 +61,7 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 - Dead Letter Queue (DLQ)
 - Dead Letter Queue endpoint (`GET /dead-jobs`)
 - Replay of Dead Jobs (`POST /dead-jobs/{id}/replay`)
+- Acknowledgements and Validity Timeout
 
 ### Coming Soon
 
@@ -105,6 +104,7 @@ This project has taught me about:
 - investigating of production issues
 - Limitations of using a Redis List for a DLQ
 - Non Atomicity during Replay of Dead Jobs
+- Acknowledgement and Validity Timeout of Jobs
 
 ---
 

@@ -14,7 +14,38 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 )
+
+func startReaper(ctx context.Context, q *queue.RedisQueue) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	logger.Log.Info("Reaper started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Info("Reaper shutting down")
+			return
+		case <-ticker.C:
+			n, err := q.ReapExpired(ctx)
+			if err != nil {
+				logger.Log.Error(
+					"Reaper failed",
+					"error", err)
+				continue
+			}
+			if n > 0 {
+				metrics.JobsReaped.Add(float64(n))
+				logger.Log.Warn(
+					"Reaped expired jobs (visibility timeout)",
+					"count", n,
+				)
+			}
+		}
+	}
+}
 
 func main() {
 	metrics.Init()
@@ -49,6 +80,8 @@ func main() {
 		go w.Start(ctx, registry)
 
 	}
+
+	go startReaper(ctx, q)
 
 	mux := http.NewServeMux()
 

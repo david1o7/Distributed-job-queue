@@ -24,6 +24,14 @@ type Queue interface {
 	ListDeadJobs(ctx context.Context) ([]jobs.DeadJob, error)
 
 	ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, error)
+
+	Claim(ctx context.Context, visibilityTimeout time.Duration) (*jobs.Job, error)
+
+	ACK(ctx context.Context, jobID string) error
+
+	Nack(ctx context.Context, job jobs.Job) error
+
+	ReapExpired(ctx context.Context) (int, error)
 }
 
 type RedisQueue struct {
@@ -204,4 +212,83 @@ func (q *RedisQueue) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, e
 	}
 
 	return nil, redis.Nil
+}
+
+func (q *RedisQueue) Claim(ctx context.Context, visibilityTimeout time.Duration) (*jobs.Job, error) {
+	result, err := q.client.BRPop(ctx, 0, "jobs").Result()
+
+	if err != nil {
+		return nil, err
+	}
+
+	var job jobs.Job
+
+	if err := json.Unmarshal([]byte(result[1]), &job); err != nil {
+		return nil, err
+	}
+
+	deadline := time.Now().Add(visibilityTimeout).Unix()
+
+	err = q.client.ZAdd(ctx, "jobs:processing", redis.Z{
+		Score:  float64(deadline),
+		Member: job.ID,
+	}).Err()
+
+	if err != nil {
+		_ = q.client.LPush(ctx, "jobs", result[1])
+
+		return nil, err
+	}
+
+	return &job, nil
+}
+
+func (q *RedisQueue) ACK(ctx context.Context, jobID string) error {
+	return q.client.ZRem(ctx, "jobs:processing", jobID).Err()
+}
+
+func (q *RedisQueue) Nack(ctx context.Context, job jobs.Job) error {
+	data, err := json.Marshal(job)
+
+	if err != nil {
+		return err
+	}
+
+	pipe := q.client.Pipeline()
+	pipe.ZRem(ctx, "jobs:processing", job.ID)
+	pipe.LPush(ctx, "jobs", data)
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (q *RedisQueue) ReapExpired(ctx context.Context) (int, error) {
+	now := float64(time.Now().Unix())
+
+	ids, err := q.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     "jobs:processing",
+		Start:   "-inf",
+		Stop:    fmt.Sprintf("%f", now),
+		ByScore: true,
+	}).Result()
+
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		job, err := q.GetJob(ctx, id)
+		if err != nil {
+			_ = q.client.ZRem(ctx, "jobs:processing", id)
+			continue
+		}
+
+		data, _ := json.Marshal(job)
+		pipe := q.client.Pipeline()
+		pipe.LPush(ctx, "jobs", data)
+		pipe.ZRem(ctx, "jobs:processing", id)
+		if _, err := pipe.Exec(ctx); err == nil {
+			count++
+		}
+	}
+	return count, nil
 }

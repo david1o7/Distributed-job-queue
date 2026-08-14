@@ -43,8 +43,6 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 			"job_id", job.ID,
 		)
 
-		metrics.JobsQueued.Inc()
-
 		ctx := context.Background()
 
 		if err := q.Push(ctx, job); err != nil {
@@ -52,9 +50,9 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 			return
 		}
 
-		err := q.SaveJob(ctx, job)
+		metrics.JobsQueued.Inc()
 
-		if err != nil {
+		if err := q.SaveJob(ctx, job); err != nil {
 			http.Error(w, "failed to save job", http.StatusInternalServerError)
 
 			return

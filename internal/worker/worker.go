@@ -10,9 +10,10 @@ import (
 	"distributed-job-system/internal/metrics"
 	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/retry"
-	"log"
 	"time"
 )
+
+const visibilityTimeout = 30 * time.Second
 
 type Worker struct {
 	ID         int
@@ -41,18 +42,32 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 		select {
 
 		case <-ctx.Done():
-			log.Println("Worker shutting Down!")
+			logger.Log.Info(
+				"Worker shutting Down!",
+				"worker", w.ID,
+			)
+
 			return
 
 		default:
-			job, err := w.Queue.Pop(ctx)
+			job, err := w.Queue.Claim(ctx, visibilityTimeout)
 
 			if err != nil {
+				if ctx.Err() != nil {
+					logger.Log.Error(
+						"Background Context Error",
+						"Err", ctx.Err(),
+					)
+					return
+				}
+
 				logger.Log.Error(
-					"Failed to pop job",
+					"Failed to claim job",
 					"worker", w.ID,
 					"error", err,
 				)
+
+				time.Sleep(1 * time.Second)
 				continue
 			}
 
@@ -66,16 +81,18 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 				CreatedAt:  time.Now(),
 			}
 
-			err = w.Queue.SaveJob(ctx, Recievedjob)
-
-			if err != nil {
+			if err = w.Queue.SaveJob(ctx, Recievedjob); err != nil {
 				logger.Log.Error(
 					"Failed to Save job",
 					"Job ID", Recievedjob.ID,
 					"error", err,
 				)
-				return
+				job = &Recievedjob
+				_ = w.Queue.Nack(ctx, *job)
+				continue
 			}
+
+			metrics.JobsProcessing.Inc()
 
 			err1 := registry.Execute(ctx, Recievedjob)
 
@@ -87,9 +104,6 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 					"job", Recievedjob.ID,
 					"error", err,
 				)
-			}
-
-			if err1 != nil {
 
 				Recievedjob.RetryCount++
 
@@ -111,51 +125,25 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 					Recievedjob.NextRetry = time.Now().Add(delay)
 					Recievedjob.Status = jobs.StatusRetrying
 
-					timer := time.NewTimer(delay)
-					defer timer.Stop()
-
-					select {
-					case <-ctx.Done():
-						return
-
-					case <-timer.C:
-					}
-
-					err = w.Queue.SaveJob(ctx, Recievedjob)
-
-					if err != nil {
+					if err = w.Queue.SaveJob(ctx, Recievedjob); err != nil {
 						logger.Log.Error(
-							"Failed to Save job",
+							"Failed to Save job's retry state",
 							"Job ID", Recievedjob.ID,
 							"error", err,
 						)
 						return
 					}
 
-					err := w.Queue.Push(ctx, Recievedjob)
-
-					if err != nil {
+					if err := w.Queue.Nack(ctx, Recievedjob); err != nil {
 						logger.Log.Error(
-							"Failed to Enqueue job",
+							"Failed to Nack job",
 							"worker", w.ID,
 							"job_id", Recievedjob.ID,
 							"Error", err,
 						)
-						continue
 					}
 
 					continue
-				}
-
-				err = w.Queue.SaveJob(ctx, Recievedjob)
-
-				if err != nil {
-					logger.Log.Error(
-						"Failed to Save job",
-						"Job ID", Recievedjob.ID,
-						"error", err,
-					)
-					return
 				}
 
 				Recievedjob.Status = jobs.StatusFailed
@@ -216,26 +204,36 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 						"job", Recievedjob.ID,
 						"error", err,
 					)
-					continue
+				} else {
+					metrics.JobsDeadLetter.Inc()
+
+					logger.Log.Error(
+						"Job moved to dead letter queue",
+						"worker", w.ID,
+						"job", job.ID,
+					)
 				}
-
-				metrics.JobsDeadLetter.Inc()
-
+				_ = w.Queue.ACK(ctx, Recievedjob.ID)
 				continue
 			}
 			Recievedjob.Status = jobs.StatusCompleted
 
 			metrics.JobsCompleted.Inc()
 
-			err = w.Queue.SaveJob(ctx, Recievedjob)
-
-			if err != nil {
+			if err = w.Queue.SaveJob(ctx, Recievedjob); err != nil {
 				logger.Log.Error(
 					"Failed to Save job",
 					"Job ID", Recievedjob.ID,
 					"error", err,
 				)
-				return
+			}
+
+			if err = w.Queue.ACK(ctx, Recievedjob.ID); err != nil {
+				logger.Log.Error(
+					"Failed to Ack job",
+					"Job ID", Recievedjob.ID,
+					"error", err,
+				)
 			}
 
 			logger.Log.Info(
@@ -247,14 +245,3 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 		}
 	}
 }
-
-// func Process(job jobs.Job) error{
-
-// 	time.Sleep(2 * time.Second)
-
-// 	if rand.Intn(10) < 3{
-// 		return errors.New("simulated processing failure")
-// 	}
-
-// 	return nil
-// }
