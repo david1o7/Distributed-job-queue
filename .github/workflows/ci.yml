@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: main
+    branches: [ main ]
   pull_request:
-    branches: main
+    branches: [ main ]
 
 jobs:
   test:
@@ -13,7 +13,7 @@ jobs:
 
     strategy:
       matrix:
-        go-version: "1.25" 
+        go-version: ["1.22", "1.23"]
 
     steps:
       - name: Checkout code
@@ -31,17 +31,15 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Run tests
-        run: go test ./... -v -race -count=1 -timeout=60s
+      - name: Run tests with coverage & race detector
+        run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic -count=1 -timeout=60s
 
-      - name: Run tests with coverage
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
-
-      - name: Upload coverage to Codecov (optional)
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
-        if: matrix.go-version == '1.25'   
+        if: matrix.go-version == '1.23'
         with:
           files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
   lint:
@@ -54,7 +52,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.23"
           cache: true
 
       - name: Run golangci-lint
@@ -66,7 +64,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test]          # only build if tests pass
+    needs: [test, lint]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -74,7 +72,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.23"
           cache: true
 
       - name: Build binary
