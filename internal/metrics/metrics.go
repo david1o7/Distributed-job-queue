@@ -78,6 +78,22 @@ var JobsReaped = prometheus.NewCounter(
 	},
 )
 
+var JobsScheduled = prometheus.NewCounter(
+	prometheus.CounterOpts{
+
+		Name: "jobs_scheduled_total",
+
+		Help: "Total jobs scheduled for delayed retry",
+	})
+
+var JobsDelayedMoved = prometheus.NewCounter(
+	prometheus.CounterOpts{
+
+		Name: "jobs_delayed_moved_total",
+
+		Help: "Total delayed jobs moved back to the main queue",
+	})
+
 func Init() {
 
 	prometheus.MustRegister(
@@ -89,6 +105,8 @@ func Init() {
 		JobsProcessing,
 		JobsDeadLetter,
 		JobsReaped,
+		JobsScheduled,
+		JobsDelayedMoved,
 	)
 
 }

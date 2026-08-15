@@ -63,7 +63,7 @@ func ReplayDeadJobHandler(q *queue.RedisQueue) http.HandlerFunc {
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"job_id": job.ID,
 			"status": job.Status,
-			}); err != nil {
+		}); err != nil {
 			http.Error(w, "failed to encode response", http.StatusInternalServerError)
 			return
 		}

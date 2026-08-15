@@ -47,6 +47,30 @@ func startReaper(ctx context.Context, q *queue.RedisQueue) {
 	}
 }
 
+func startDelayedMover(ctx context.Context, q *queue.RedisQueue) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	logger.Log.Info("Delayed job mover started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Info("Delayed job mover shutting down")
+			return
+		case <-ticker.C:
+			n, err := q.MoveReadyDelayedJobs(ctx)
+			if err != nil {
+				logger.Log.Error("Delayed mover failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				metrics.JobsDelayedMoved.Add(float64(n))
+				logger.Log.Info("Moved delayed jobs to main queue", "count", n)
+			}
+		}
+	}
+}
+
 func main() {
 	metrics.Init()
 
@@ -82,6 +106,8 @@ func main() {
 	}
 
 	go startReaper(ctx, q)
+
+	go startDelayedMover(ctx, q)
 
 	mux := http.NewServeMux()
 

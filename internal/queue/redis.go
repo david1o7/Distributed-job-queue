@@ -32,6 +32,10 @@ type Queue interface {
 	Nack(ctx context.Context, job jobs.Job) error
 
 	ReapExpired(ctx context.Context) (int, error)
+
+	Schedule(ctx context.Context, job jobs.Job, delay time.Duration) error
+
+	MoveReadyDelayedJobs(ctx context.Context) (int, error)
 }
 
 type RedisQueue struct {
@@ -291,4 +295,58 @@ func (q *RedisQueue) ReapExpired(ctx context.Context) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func (q *RedisQueue) Schedule(ctx context.Context, job jobs.Job, delay time.Duration) error {
+	readyAt := time.Now().Add(delay).Unix()
+
+	if err := q.SaveJob(ctx, job); err != nil {
+		return nil
+	}
+
+	return q.client.ZAdd(ctx, "job:delayed", redis.Z{
+		Score:  float64(readyAt),
+		Member: job.ID,
+	}).Err()
+}
+
+func (q *RedisQueue) MoveReadyDelayedJobs(ctx context.Context) (int, error) {
+	now := float64(time.Now().Unix())
+
+	ids, err := q.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     "jobs:delayed",
+		Start:   "-inf",
+		Stop:    fmt.Sprintf("%f", now),
+		ByScore: true,
+	}).Result()
+
+	if err != nil {
+		return 0, err
+	}
+
+	moved := 0
+	for _, id := range ids {
+		job, err := q.GetJob(ctx, id)
+		if err != nil {
+
+			_ = q.client.ZRem(ctx, "jobs:delayed", id)
+			continue
+		}
+
+		job.Status = jobs.StatusQueued
+
+		data, err := json.Marshal(job)
+		if err != nil {
+			continue
+		}
+
+		pipe := q.client.Pipeline()
+		pipe.LPush(ctx, "jobs", data)
+		pipe.ZRem(ctx, "jobs:delayed", id)
+		if _, err := pipe.Exec(ctx); err == nil {
+			moved++
+		}
+	}
+
+	return moved, nil
 }

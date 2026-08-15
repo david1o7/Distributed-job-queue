@@ -107,9 +107,15 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 
 				Recievedjob.RetryCount++
 
-				delay := retry.CalculateBackOff(Recievedjob.RetryCount)
-
 				if Recievedjob.RetryCount <= w.MaxRetries {
+
+					metrics.JobsRetried.Inc()
+					metrics.JobsScheduled.Inc()
+
+					delay := retry.CalculateBackOff(Recievedjob.RetryCount)
+
+					Recievedjob.NextRetry = time.Now().Add(delay)
+					Recievedjob.Status = jobs.StatusRetrying
 
 					metrics.JobsRetried.Inc()
 
@@ -122,24 +128,22 @@ func (w *Worker) Start(ctx context.Context, registry *Registry) {
 						"Status", Recievedjob.Status,
 					)
 
-					Recievedjob.NextRetry = time.Now().Add(delay)
-					Recievedjob.Status = jobs.StatusRetrying
-
-					if err = w.Queue.SaveJob(ctx, Recievedjob); err != nil {
+					if err := w.Queue.Schedule(ctx, Recievedjob, delay); err != nil {
 						logger.Log.Error(
-							"Failed to Save job's retry state",
-							"Job ID", Recievedjob.ID,
+							"Failed to schedule delayed retry",
+							"job", job.ID,
 							"error", err,
 						)
-						return
+
+						_ = w.Queue.Nack(ctx, Recievedjob)
+						continue
 					}
 
-					if err := w.Queue.Nack(ctx, Recievedjob); err != nil {
+					if err := w.Queue.ACK(ctx, Recievedjob.ID); err != nil {
 						logger.Log.Error(
-							"Failed to Nack job",
-							"worker", w.ID,
-							"job_id", Recievedjob.ID,
-							"Error", err,
+							"Failed to ack after scheduling",
+							"job", Recievedjob.ID,
+							"error", err,
 						)
 					}
 

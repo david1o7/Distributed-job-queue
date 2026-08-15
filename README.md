@@ -40,8 +40,6 @@ The goal isn't to clone existing tools—it's to learn the engineering behind th
 
 ![Demo](image/Code_p6EroVcsVI.gif)
 
-![Demo](image/image1.png)
-
 ---
 
 # Features
@@ -151,7 +149,6 @@ Every design has trade-offs.
 Current compromises include:
 
 - Single Redis queue
-- No acknowledgements
 - No worker crash recovery
 - FIFO scheduling only
 - Fire-and-forget producer
