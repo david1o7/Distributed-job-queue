@@ -85,30 +85,7 @@ This project rebuilds those ideas on **Redis + Go** so the trade-offs are visibl
 
 ## Architecture
 
-```text
-                    ┌──────────────┐
-   POST /jobs       │  HTTP API    │     GET /jobs/{id}
-   /dead-jobs       │  + /metrics  │     /health /ready
-                    └──────┬───────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │ RedisQueue   │
-                    │  Lua scripts │
-                    └──────┬───────┘
-                           │
-        ┌──────────────────┼──────────────────┐
-        ▼                  ▼                  ▼
-   List: jobs      ZSET: processing     ZSET: delayed
-   List: dead_job  String: job:{id}     SET: processed
-                           │
-                    ┌──────┴───────┐
-                    │ Worker pool  │── heartbeat → ExtendVisibility
-                    │ handlers     │
-                    └──────────────┘
-                           │
-              Reaper · Delayed mover · Metrics sampler
-```
+[System Architecture](docs/system,%20gen.jpeg)
 
 **Idea:** the **queue** moves work; the **job store** holds truth about status, retries, timestamps, and worker ownership.
 
