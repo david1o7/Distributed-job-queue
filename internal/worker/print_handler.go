@@ -11,12 +11,11 @@ import (
 type PrintHandler struct{}
 
 func (p *PrintHandler) Handle(ctx context.Context, job jobs.Job) error {
-	logger.Log.Info(
-		"Processing Print job",
-		"id", job.ID,
-		"type", job.Type,
-		"payload", string(job.Payload),
-	)
+	log := logger.WithContext(ctx)
+    log.Info(
+			"handling print job", 
+			"payload", string(job.Payload),
+		)
 
 	type payload struct {
 		Name string `json:"name"`

@@ -1,0 +1,12 @@
+.git
+.gitignore
+*.md
+image/
+bin/
+coverage.out
+**/*_test.go
+.github/
+Dockerfile
+docker-compose*.yml
+prometheus/
+grafana/

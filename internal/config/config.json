@@ -1,0 +1,10 @@
+{
+  "http_addr": ":8080",
+  "redis_addr": "localhost:6379",
+  "worker_count": 3,
+  "max_retries": 3,
+  "visibility_timeout": "30s",
+  "reaper_interval": "5s",
+  "delayed_mover_interval": "2s",
+  "metrics_interval": "2s"
+}

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"distributed-job-system/internal/config"
 	"distributed-job-system/internal/handlers"
 	"distributed-job-system/internal/logger"
 	"distributed-job-system/internal/metrics"
+	"distributed-job-system/internal/middleware"
 	"distributed-job-system/internal/producer"
 	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/worker"
@@ -12,13 +14,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func startReaper(ctx context.Context, q *queue.RedisQueue) {
-	ticker := time.NewTicker(5 * time.Second)
+func startReaper(ctx context.Context, q *queue.RedisQueue, timer time.Duration) {
+	ticker := time.NewTicker(timer)
 	defer ticker.Stop()
 
 	logger.Log.Info("Reaper started")
@@ -47,9 +50,11 @@ func startReaper(ctx context.Context, q *queue.RedisQueue) {
 	}
 }
 
-func startDelayedMover(ctx context.Context, q *queue.RedisQueue) {
-	ticker := time.NewTicker(2 * time.Second)
+func startDelayedMover(ctx context.Context, q *queue.RedisQueue, timer time.Duration) {
+	ticker := time.NewTicker(timer)
+
 	defer ticker.Stop()
+
 	logger.Log.Info("Delayed job mover started")
 
 	for {
@@ -71,11 +76,57 @@ func startDelayedMover(ctx context.Context, q *queue.RedisQueue) {
 	}
 }
 
+func startMetricsSampler(ctx context.Context, q *queue.RedisQueue, timer time.Duration) {
+	ticker := time.NewTicker(timer)
+
+	defer ticker.Stop()
+
+	logger.Log.Info("Metrics sampler started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Info("Metrics sampler shutting down")
+			return
+		case <-ticker.C:
+			stats, err := q.Stats(ctx)
+			if err != nil {
+				logger.Log.Error("metrics sampler failed", "error", err)
+				continue
+			}
+			metrics.QueueDepth.Set(float64(stats.MainDepth))
+			metrics.JobsInFlight.Set(float64(stats.Processing))
+			metrics.JobsDelayed.Set(float64(stats.Delayed))
+			metrics.DeadLetterDepth.Set(float64(stats.DeadLetter))
+		}
+	}
+}
+
 func main() {
+	cfg, err := config.Load()
+
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	logger.Log.Info("config loaded",
+		"file", cfg.ConfigFile,
+		"http_addr", cfg.HTTPAddr,
+		"redis_addr", cfg.RedisAddr,
+		"worker_count", cfg.WorkerCount,
+		"max_retries", cfg.MaxRetries,
+		"visibility_timeout", cfg.VisibilityTimeout.String(),
+	)
 	metrics.Init()
 
 	REDIS_ADDR := os.Getenv("REDIS_ADDR")
 	q := queue.NewRedisQueue(REDIS_ADDR)
+
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelPing()
+	if err := q.Ping(pingCtx); err != nil {
+		log.Fatalf("redis not reachable at %s: %v", cfg.RedisAddr, err)
+	}
 
 	registry := worker.NewRegistry()
 
@@ -84,47 +135,44 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	WorkerCount := 1 //Safe number to start at if the .env isnt able to load
+	for i := 1; i <= cfg.WorkerCount; i++ {
 
-	if value := os.Getenv("WORKER_COUNT"); value != "" {
+		w := worker.NewWorker(i, q, cfg.MaxRetries)
 
-		n, err := strconv.Atoi(value)
-
-		if err == nil && n > 0 {
-			WorkerCount = n
-		}
-	}
-
-	maxRetries, _ := strconv.Atoi(os.Getenv("MAX_RETRIES"))
-
-	for i := 1; i <= WorkerCount; i++ {
-
-		w := worker.NewWorker(i, q, maxRetries)
-
-		go w.Start(ctx, registry)
+		go w.Start(ctx, registry, cfg.VisibilityTimeout)
 
 	}
 
-	go startReaper(ctx, q)
+	go startReaper(ctx, q, cfg.ReaperInterval)
 
-	go startDelayedMover(ctx, q)
+	go startDelayedMover(ctx, q, cfg.DelayedMoverInterval)
+
+	go startMetricsSampler(ctx, q, cfg.MetricsInterval)
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/jobs", producer.Handler(q))
+	mux.HandleFunc("/job", producer.Handler(q))
 	mux.HandleFunc("/jobs/", handlers.GetJobHandler(q))
 	mux.HandleFunc("/dead-jobs", handlers.DeadJobHandler(q))
 	mux.HandleFunc("/dead-jobs/{id}/replay", handlers.ReplayDeadJobHandler(q))
 
+	mux.HandleFunc("/health", handlers.HealthHandler())
+	mux.HandleFunc("/ready", handlers.ReadyHandler(q))
+
+	mux.Handle("/metrics", promhttp.Handler())
+
+	var handler http.Handler = mux
+	handler = middleware.RequestID(handler)
+
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+		Addr:    cfg.HTTPAddr,
+		Handler: handler,
 	}
 
 	go func() {
 		logger.Log.Info(
 			"Server running",
-			"PORT", 8080,
+			"PORT", cfg.HTTPAddr,
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
