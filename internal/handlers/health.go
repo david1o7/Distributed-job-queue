@@ -18,7 +18,6 @@ type readyResponse struct {
 	Redis  string `json:"redis"`
 }
 
-
 func HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -28,7 +27,6 @@ func HealthHandler() http.HandlerFunc {
 		})
 	}
 }
-
 
 func ReadyHandler(q *queue.RedisQueue) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

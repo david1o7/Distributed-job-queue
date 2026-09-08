@@ -13,11 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 type failingHandler struct{}
 
 func (f *failingHandler) Handle(ctx context.Context, job jobs.Job) error {
-	return context.DeadlineExceeded 
+	return context.DeadlineExceeded
 }
 
 func TestWorkerSchedulesDelayedRetryOnFailure(t *testing.T) {
@@ -44,16 +43,13 @@ func TestWorkerSchedulesDelayedRetryOnFailure(t *testing.T) {
 	require.NoError(t, q.Push(ctx, job))
 	require.NoError(t, q.SaveJob(ctx, job))
 
-
 	claimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
 
-	
 	claimed.RetryCount++
 	claimed.Status = jobs.StatusRetrying
 	require.NoError(t, q.Schedule(ctx, *claimed, 2*time.Second))
 
-	
 	proc, _ := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NotContains(t, proc, "fail-job")
 
@@ -121,7 +117,7 @@ func TestHeartbeatExtendsVisibility(t *testing.T) {
 	w := NewWorker(1, q, 3)
 	go w.heartbeat(ctx, jobID, 30)
 
-	time.Sleep(100 * time.Millisecond) 
+	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, q.ExtendVisibility(ctx, jobID, 30*time.Second))
 
 	score, err := q.Client.ZScore(ctx, "jobs:processing", jobID).Result()

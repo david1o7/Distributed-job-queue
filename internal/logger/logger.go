@@ -17,7 +17,6 @@ const (
 
 var Log *slog.Logger = slog.Default()
 
-
 func Init(format, level string) {
 	var lvl slog.Level
 	switch strings.ToLower(strings.TrimSpace(level)) {
@@ -45,7 +44,6 @@ func Init(format, level string) {
 	slog.SetDefault(Log)
 }
 
-
 func WithContext(ctx context.Context) *slog.Logger {
 	if ctx == nil {
 		return Log
@@ -62,7 +60,7 @@ func WithContext(ctx context.Context) *slog.Logger {
 	if v, ok := ctx.Value(WorkerIDKey).(int); ok {
 		args = append(args, "worker_id", v)
 	}
-	
+
 	if v, ok := ctx.Value(WorkerIDKey).(string); ok && v != "" {
 		args = append(args, "worker_id", v)
 	}
@@ -72,8 +70,6 @@ func WithContext(ctx context.Context) *slog.Logger {
 	}
 	return Log.With(args...)
 }
-
-
 
 func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, RequestIDKey, id)

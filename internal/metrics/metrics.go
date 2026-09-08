@@ -97,19 +97,18 @@ var JobsDelayedMoved = prometheus.NewCounter(
 var JobsHeartbeat = prometheus.NewCounter(
 	prometheus.CounterOpts{
 
-	Name: "jobs_heartbeat_total",
+		Name: "jobs_heartbeat_total",
 
-	Help: "Total visibility extensions (heartbeats) performed",
-})
+		Help: "Total visibility extensions (heartbeats) performed",
+	})
 
 var JobsConcurrencyLimited = prometheus.NewCounter(
 	prometheus.CounterOpts{
 
-	Name: "jobs_concurrency_limited_total",
+		Name: "jobs_concurrency_limited_total",
 
-	Help: "Jobs that were requeued because the per-type concurrency limit was reached",
-})
-
+		Help: "Jobs that were requeued because the per-type concurrency limit was reached",
+	})
 
 var JobDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name: "job_duration_seconds",
@@ -117,7 +116,7 @@ var JobDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Buckets: []float64{
 		0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120,
 	},
-}, []string{"job_type", "status"}) 
+}, []string{"job_type", "status"})
 
 var QueueLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name: "job_queue_latency_seconds",
@@ -127,24 +126,20 @@ var QueueLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	},
 }, []string{"job_type"})
 
-
 var QueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "jobs_queue_depth",
 	Help: "Current number of jobs in the main queue",
 })
-
 
 var JobsInFlight = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "jobs_in_flight",
 	Help: "Current number of jobs being processed (processing set size)",
 })
 
-
 var JobsDelayed = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "jobs_delayed",
 	Help: "Current number of jobs waiting for delayed retry",
 })
-
 
 var DeadLetterDepth = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "jobs_dead_letter_depth",

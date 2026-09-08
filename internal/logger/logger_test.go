@@ -14,7 +14,6 @@ func TestWithRequestIDAndFromCtx(t *testing.T) {
 	ctx = WithRequestID(ctx, "req-123")
 	require.Equal(t, "req-123", RequestIDFromCtx(ctx))
 
-	
 	ctx2 := WithRequestID(context.Background(), "")
 	require.Equal(t, "", RequestIDFromCtx(ctx2))
 }
@@ -30,13 +29,12 @@ func TestWithJobIDAndFromCtx(t *testing.T) {
 func TestWithWorkerID(t *testing.T) {
 	ctx := WithWorkerID(context.Background(), 7)
 
-	
 	v := ctx.Value(WorkerIDKey)
 	require.Equal(t, 7, v)
 }
 
 func TestWithContextIncludesIDs(t *testing.T) {
-	
+
 	Init("text", "debug")
 
 	ctx := context.Background()
@@ -47,7 +45,6 @@ func TestWithContextIncludesIDs(t *testing.T) {
 	log := WithContext(ctx)
 	require.NotNil(t, log)
 
-	
 	log.Info("test message")
 }
 
@@ -72,7 +69,6 @@ func TestInitTextAndJSON(t *testing.T) {
 	require.NotNil(t, Log)
 	Log.Warn("warn ok")
 
-	
 	Init("nope", "info")
 	require.NotNil(t, Log)
 }

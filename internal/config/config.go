@@ -9,25 +9,26 @@ import (
 	"time"
 )
 
-
 type Config struct {
-	
-	HTTPAddr string `json:"http_addr"`
-	RedisAddr string `json:"redis_addr"`
-	WorkerCount int `json:"worker_count"`
-	MaxRetries  int `json:"max_retries"`
+	HTTPAddr    string `json:"http_addr"`
+	RedisAddr   string `json:"redis_addr"`
+	WorkerCount int    `json:"worker_count"`
+	MaxRetries  int    `json:"max_retries"`
 
-	
-	VisibilityTimeout time.Duration `json:"visibility_timeout"`
+	VisibilityTimeout    time.Duration `json:"visibility_timeout"`
 	ReaperInterval       time.Duration `json:"reaper_interval"`
 	DelayedMoverInterval time.Duration `json:"delayed_mover_interval"`
 	MetricsInterval      time.Duration `json:"metrics_interval"`
 
-	LogFormat string `json:"log_format"`
-	LogLevel  string `json:"log_level"`
+	LogFormat  string `json:"log_format"`
+	LogLevel   string `json:"log_level"`
 	ConfigFile string `json:"-"`
-}
+	Broker     string `json:"broker"`
 
+	RabbitURL    string `json:"rabbit_url"`
+	KafkaBrokers string `json:"kafka_brokers"`
+	KafkaTopic   string `json:"kafka_topic"`
+}
 
 type fileConfig struct {
 	HTTPAddr             string `json:"http_addr"`
@@ -40,7 +41,6 @@ type fileConfig struct {
 	MetricsInterval      string `json:"metrics_interval"`
 }
 
-
 func Load() (*Config, error) {
 	cfg := defaults()
 
@@ -51,7 +51,7 @@ func Load() (*Config, error) {
 		}
 		cfg.ConfigFile = path
 	} else if os.Getenv("CONFIG_FILE") != "" {
-		
+
 		return nil, fmt.Errorf("CONFIG_FILE=%s: %w", path, err)
 	}
 
@@ -76,8 +76,8 @@ func defaults() *Config {
 		ReaperInterval:       5 * time.Second,
 		DelayedMoverInterval: 2 * time.Second,
 		MetricsInterval:      2 * time.Second,
-		LogFormat: "text",
-		LogLevel:  "info",
+		LogFormat:            "text",
+		LogLevel:             "info",
 	}
 }
 
@@ -193,7 +193,7 @@ func applyEnv(cfg *Config) error {
 	}
 
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
-    	cfg.LogFormat = v
+		cfg.LogFormat = v
 	}
 
 	if v := os.Getenv("LOG_LEVEL"); v != "" {

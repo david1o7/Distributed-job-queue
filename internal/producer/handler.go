@@ -13,9 +13,24 @@ import (
 )
 
 type CreateJobRequest struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
-	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	Type           string          `json:"type"`
+	Payload        json.RawMessage `json:"payload"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	Priority       jobs.Priority   `json:"priority,omitempty"`
+}
+
+var TypePriority = map[string]jobs.Priority{
+	"print": jobs.PriorityDefault,
+}
+
+func PriorityForType(job CreateJobRequest) jobs.Priority {
+	if job.Priority != "" {
+		return jobs.NormalizePriority(job.Priority)
+	}
+	if p, ok := TypePriority[job.Type]; ok {
+		return p
+	}
+	return jobs.PriorityDefault
 }
 
 func Handler(q *queue.RedisQueue) http.HandlerFunc {
@@ -23,7 +38,7 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateJobRequest
 		ctx := r.Context()
-        log := logger.WithContext(ctx)
+		log := logger.WithContext(ctx)
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
@@ -31,28 +46,29 @@ func Handler(q *queue.RedisQueue) http.HandlerFunc {
 		}
 
 		job := jobs.Job{
-			ID:         uuid.NewString(),
-			Type:       req.Type,
-			Payload:    req.Payload,
-			Status:     jobs.StatusQueued,
-			RetryCount: 0,
-			MaxRetries: 3,
-			CreatedAt:  time.Now(),
+			ID:             uuid.NewString(),
+			Type:           req.Type,
+			Payload:        req.Payload,
+			Status:         jobs.StatusQueued,
+			RetryCount:     0,
+			MaxRetries:     3,
+			CreatedAt:      time.Now(),
 			IdempotencyKey: req.IdempotencyKey,
+			Priority:       PriorityForType(req),
 		}
 
 		log.Info("enqueue job",
-            "job_id", job.ID,
-            "job_type", job.Type,
-        )
+			"job_id", job.ID,
+			"job_type", job.Type,
+		)
 
-        if err := q.Push(ctx, job); err != nil {
-            log.Error("failed to enqueue", 
-						"error", err, 
-						"job_id", job.ID)
-            http.Error(w, "failed to enqueue", http.StatusInternalServerError)
-            return
-        }
+		if err := q.Push(ctx, job); err != nil {
+			log.Error("failed to enqueue",
+				"error", err,
+				"job_id", job.ID)
+			http.Error(w, "failed to enqueue", http.StatusInternalServerError)
+			return
+		}
 
 		metrics.JobsQueued.Inc()
 

@@ -21,28 +21,44 @@ func testQueue(t *testing.T) (*queue.RedisQueue, *miniredis.Miniredis) {
 	return queue.NewRedisQueue(mr.Addr()), mr
 }
 
-func TestStartReaperRedeliversExpired(t *testing.T) {
-	metrics.Init() 
+func readyLen(ctx context.Context, q *queue.RedisQueue) int64 {
+	var total int64
+	for _, key := range []string{"jobs:high", "jobs:default", "jobs:low", "jobs"} {
+		n, err := q.Client.LLen(ctx, key).Result()
+		if err == nil {
+			total += n
+		}
+	}
+	return total
+}
 
+func TestMain(m *testing.M) {
+	metrics.Init()
+	m.Run()
+}
+
+func TestStartReaperRedeliversExpired(t *testing.T) {
 	q, _ := testQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	job := jobs.Job{ID: "reap-1", Type: "print", Status: jobs.StatusProcessing}
+	job := jobs.Job{
+		ID:       "reap-1",
+		Type:     "print",
+		Status:   jobs.StatusProcessing,
+		Priority: jobs.PriorityDefault,
+	}
 	require.NoError(t, q.SaveJob(ctx, job))
 
-	
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
 		Score:  float64(time.Now().Add(-time.Minute).Unix()),
 		Member: job.ID,
 	}).Err())
 
-	
 	go startReaper(ctx, q, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		n, err := q.Client.LLen(ctx, "jobs").Result()
-		return err == nil && n >= 1
+		return readyLen(ctx, q) >= 1
 	}, 2*time.Second, 20*time.Millisecond)
 
 	cancel()
@@ -53,7 +69,12 @@ func TestStartDelayedMoverMovesReadyJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	job := jobs.Job{ID: "del-1", Type: "print", Status: jobs.StatusRetrying}
+	job := jobs.Job{
+		ID:       "del-1",
+		Type:     "print",
+		Status:   jobs.StatusRetrying,
+		Priority: jobs.PriorityDefault,
+	}
 	require.NoError(t, q.SaveJob(ctx, job))
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
 		Score:  float64(time.Now().Add(-time.Second).Unix()),
@@ -63,25 +84,32 @@ func TestStartDelayedMoverMovesReadyJob(t *testing.T) {
 	go startDelayedMover(ctx, q, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		n, err := q.Client.LLen(ctx, "jobs").Result()
-		return err == nil && n >= 1
+		return readyLen(ctx, q) >= 1
 	}, 2*time.Second, 20*time.Millisecond)
 
 	cancel()
 }
 
 func TestStartMetricsSamplerUpdatesGauges(t *testing.T) {
+
 	q, _ := testQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	
-	job := jobs.Job{ID: "m1", Type: "print", Status: jobs.StatusQueued}
+	job := jobs.Job{
+		ID:       "m1",
+		Type:     "print",
+		Status:   jobs.StatusQueued,
+		Priority: jobs.PriorityDefault,
+	}
 	require.NoError(t, q.Push(ctx, job))
 
 	go startMetricsSampler(ctx, q, 20*time.Millisecond)
 
-	
-	time.Sleep(80 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		stats, err := q.Stats(ctx)
+		return err == nil && stats.MainDepth >= 1
+	}, 2*time.Second, 20*time.Millisecond)
+
 	cancel()
 }

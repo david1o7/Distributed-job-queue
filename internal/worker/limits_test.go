@@ -12,6 +12,5 @@ func TestGetConcurrencyLimit(t *testing.T) {
 		require.Equal(t, limit, GetConcurrencyLimit("print"))
 	}
 
-	
 	require.Equal(t, DefaultLimitForUnknown, GetConcurrencyLimit("no-such-type"))
 }

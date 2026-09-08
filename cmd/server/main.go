@@ -155,6 +155,9 @@ func main() {
 	mux.HandleFunc("/jobs/", handlers.GetJobHandler(q))
 	mux.HandleFunc("/dead-jobs", handlers.DeadJobHandler(q))
 	mux.HandleFunc("/dead-jobs/{id}/replay", handlers.ReplayDeadJobHandler(q))
+	mux.HandleFunc("/delayed-jobs", handlers.DelayedJobsHandler(q))
+	mux.HandleFunc("/dead-jobs", handlers.DeadJobsPagedHandler(q))
+	mux.HandleFunc("/stats", handlers.StatsHandler(q))
 
 	mux.HandleFunc("/health", handlers.HealthHandler())
 	mux.HandleFunc("/ready", handlers.ReadyHandler(q))

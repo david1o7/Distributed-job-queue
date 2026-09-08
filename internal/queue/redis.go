@@ -13,11 +13,31 @@ import (
 const processedSetKey = "jobs:processed"
 const processedTTL = 24 * time.Hour
 const concurrencyKeyPrefix = "jobs:concurrency:"
+
 type QueueStats struct {
-	MainDepth    int64
-	Processing   int64
-	Delayed      int64
-	DeadLetter   int64
+	MainDepth    int64 `json:"main_depth"`
+	ReadyHigh    int64 `json:"ready_high"`
+	ReadyDefault int64 `json:"ready_default"`
+	ReadyLow     int64 `json:"ready_low"`
+	ReadyLegacy  int64 `json:"ready_legacy,omitempty"`
+	Processing   int64 `json:"processing"`
+	Delayed      int64 `json:"delayed"`
+	DeadLetter   int64 `json:"dead_letter"`
+}
+
+type DelayedJobView struct {
+	Job     jobs.Job `json:"job"`
+	ReadyAt int64    `json:"ready_at"`
+	ReadyIn int64    `json:"ready_in"`
+	Orphan  bool     `json:"orphan,omitempty"`
+}
+
+type DeadJobPage struct {
+	Items   []jobs.DeadJob `json:"items"`
+	Total   int64          `json:"total"`
+	Start   int64          `json:"start"`
+	Count   int64          `json:"count"`
+	HasMore bool           `json:"has_more"`
 }
 
 type Queue interface {
@@ -60,6 +80,10 @@ type Queue interface {
 	ReleaseConcurrency(ctx context.Context, jobType string) error
 
 	Stats(ctx context.Context) (QueueStats, error)
+
+	ListDeadJobsPage(ctx context.Context, start, count int64) (DeadJobPage, error)
+
+	ListDelayedJobs(ctx context.Context) ([]DelayedJobView, error)
 }
 
 var acquireConcurrencyScript = redis.NewScript(`
@@ -181,14 +205,12 @@ type RedisQueue struct {
 	Client *redis.Client
 }
 
-
 func (q *RedisQueue) IsProcessed(ctx context.Context, key string) (bool, error) {
 	if key == "" {
 		return false, nil
 	}
 	return q.Client.SIsMember(ctx, processedSetKey, key).Result()
 }
-
 
 func (q *RedisQueue) MarkProcessed(ctx context.Context, key string) error {
 	if key == "" {
@@ -205,7 +227,8 @@ func (q *RedisQueue) MarkProcessed(ctx context.Context, key string) error {
 func (q *RedisQueue) Ping(ctx context.Context) error {
 	return q.Client.Ping(ctx).Err()
 }
-//Chabge above
+
+// Chabge above
 func NewRedisQueue(addr string) *RedisQueue {
 	client := redis.NewClient(
 		&redis.Options{Addr: addr})
@@ -216,13 +239,13 @@ func NewRedisQueue(addr string) *RedisQueue {
 }
 
 func (q *RedisQueue) Push(ctx context.Context, job jobs.Job) error {
-	
+	job.Priority = jobs.NormalizePriority(job.Priority)
 	data, err := json.Marshal(job)
 	if err != nil {
 		return err
 	}
-
-	return q.Client.LPush(ctx, "jobs", data).Err()
+	dest := jobs.QueueKeyFor(job.Priority)
+	return q.Client.LPush(ctx, dest, data).Err()
 }
 
 func (q *RedisQueue) Pop(ctx context.Context) (*jobs.Job, error) {
@@ -352,7 +375,7 @@ func (q *RedisQueue) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, e
 	job.Status = jobs.StatusQueued
 	job.RetryCount = 0
 	job.NextRetry = time.Time{}
-	
+
 	job.StartedAt = time.Time{}
 	job.FinishedAt = time.Time{}
 	job.WorkerID = 0
@@ -361,11 +384,11 @@ func (q *RedisQueue) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, e
 	if err != nil {
 		return nil, err
 	}
-
+	dest := jobs.QueueKeyFor(job.Priority)
 	res, err := replayDeadJobScript.Run(
 		ctx,
 		q.Client,
-		[]string{"dead_job", "jobs"},
+		[]string{"dead_job", dest},
 		id,
 		string(cleaned),
 	).Result()
@@ -389,7 +412,9 @@ func (q *RedisQueue) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, e
 }
 
 func (q *RedisQueue) Claim(ctx context.Context, visibilityTimeout time.Duration) (*jobs.Job, error) {
-	result, err := q.Client.BRPop(ctx, 0, "jobs").Result()
+	keys := jobs.AllReadyQueues()
+
+	result, err := q.Client.BRPop(ctx, 0, keys...).Result()
 
 	if err != nil {
 		return nil, err
@@ -400,6 +425,8 @@ func (q *RedisQueue) Claim(ctx context.Context, visibilityTimeout time.Duration)
 	if err := json.Unmarshal([]byte(result[1]), &job); err != nil {
 		return nil, err
 	}
+
+	job.Priority = jobs.NormalizePriority(job.Priority)
 
 	deadline := time.Now().Add(visibilityTimeout).Unix()
 
@@ -412,8 +439,7 @@ func (q *RedisQueue) Claim(ctx context.Context, visibilityTimeout time.Duration)
 	).Result()
 
 	if err != nil {
-		_ = q.Client.LPush(ctx, "jobs", result[1])
-
+		_ = q.Client.LPush(ctx, jobs.QueueKeyFor(job.Priority), result[1])
 		return nil, err
 	}
 
@@ -452,10 +478,10 @@ func (q *RedisQueue) Nack(ctx context.Context, job jobs.Job) error {
 	if err != nil {
 		return err
 	}
-
+	dest := jobs.QueueKeyFor(job.Priority)
 	pipe := q.Client.Pipeline()
 	pipe.ZRem(ctx, "jobs:processing", job.ID)
-	pipe.LPush(ctx, "jobs", data)
+	pipe.LPush(ctx, dest, data)
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -466,34 +492,35 @@ func (q *RedisQueue) ReapExpired(ctx context.Context) (int, error) {
 	ids, err := q.Client.ZRangeArgs(ctx, redis.ZRangeArgs{
 		Key:     "jobs:processing",
 		Start:   "-inf",
-		Stop:    fmt.Sprintf("%f", now),
+		Stop:    now,
 		ByScore: true,
 	}).Result()
-
 	if err != nil {
 		return 0, err
 	}
+
 	count := 0
 	for _, id := range ids {
 		job, err := q.GetJob(ctx, id)
-		if err != nil {
+		if err != nil || job == nil {
 			_ = q.Client.ZRem(ctx, "jobs:processing", id)
 			continue
 		}
 
+		job.Priority = jobs.NormalizePriority(job.Priority)
 		payload, err := json.Marshal(job)
 		if err != nil {
 			continue
 		}
 
+		dest := jobs.QueueKeyFor(job.Priority)
 		moved, err := moveOneExpiredScript.Run(
 			ctx,
 			q.Client,
-			[]string{"jobs:processing", "jobs"},
+			[]string{"jobs:processing", dest},
 			id,
 			string(payload),
 		).Int()
-
 		if err == nil && moved == 1 {
 			count++
 		}
@@ -536,8 +563,7 @@ func (q *RedisQueue) MoveReadyDelayedJobs(ctx context.Context) (int, error) {
 	movedCount := 0
 	for _, id := range ids {
 		job, err := q.GetJob(ctx, id)
-		if err != nil {
-
+		if err != nil || job == nil {
 			_ = q.Client.ZRem(ctx, "jobs:delayed", id)
 			continue
 		}
@@ -551,10 +577,11 @@ func (q *RedisQueue) MoveReadyDelayedJobs(ctx context.Context) (int, error) {
 
 		_ = q.SaveJob(ctx, *job)
 
+		dest := jobs.QueueKeyFor(job.Priority)
 		moved, err := moveOneDelayedScript.Run(
 			ctx,
 			q.Client,
-			[]string{"jobs:delayed", "jobs"},
+			[]string{"jobs:delayed", dest},
 			id,
 			string(payload),
 		).Int()
@@ -569,11 +596,11 @@ func (q *RedisQueue) MoveReadyDelayedJobs(ctx context.Context) (int, error) {
 
 func (q *RedisQueue) AcquireConcurrency(ctx context.Context, jobType string, limit int) (bool, error) {
 	if limit <= 0 {
-		return true, nil 
+		return true, nil
 	}
 
 	key := concurrencyKeyPrefix + jobType
-	
+
 	const safetyTTLSeconds = 300
 
 	result, err := acquireConcurrencyScript.Run(
@@ -590,7 +617,6 @@ func (q *RedisQueue) AcquireConcurrency(ctx context.Context, jobType string, lim
 	return result == 1, nil
 }
 
-
 func (q *RedisQueue) ReleaseConcurrency(ctx context.Context, jobType string) error {
 	key := concurrencyKeyPrefix + jobType
 	_, err := releaseConcurrencyScript.Run(ctx, q.Client, []string{key}).Result()
@@ -599,7 +625,11 @@ func (q *RedisQueue) ReleaseConcurrency(ctx context.Context, jobType string) err
 
 func (q *RedisQueue) Stats(ctx context.Context) (QueueStats, error) {
 	pipe := q.Client.Pipeline()
-	mainCh := pipe.LLen(ctx, "jobs")
+
+	highCh := pipe.LLen(ctx, "jobs:high")
+	defaultCh := pipe.LLen(ctx, "jobs:default")
+	lowCh := pipe.LLen(ctx, "jobs:low")
+	legacyCh := pipe.LLen(ctx, "jobs")
 	procCh := pipe.ZCard(ctx, "jobs:processing")
 	delayedCh := pipe.ZCard(ctx, "jobs:delayed")
 	deadCh := pipe.LLen(ctx, "dead_job")
@@ -608,10 +638,92 @@ func (q *RedisQueue) Stats(ctx context.Context) (QueueStats, error) {
 		return QueueStats{}, err
 	}
 
+	high := highCh.Val()
+	def := defaultCh.Val()
+	low := lowCh.Val()
+	legacy := legacyCh.Val()
+
 	return QueueStats{
-		MainDepth:  mainCh.Val(),
-		Processing: procCh.Val(),
-		Delayed:    delayedCh.Val(),
-		DeadLetter: deadCh.Val(),
+		MainDepth:    high + def + low + legacy,
+		ReadyHigh:    high,
+		ReadyDefault: def,
+		ReadyLow:     low,
+		ReadyLegacy:  legacy,
+		Processing:   procCh.Val(),
+		Delayed:      delayedCh.Val(),
+		DeadLetter:   deadCh.Val(),
+	}, nil
+}
+
+func (q *RedisQueue) ListDelayedJobs(ctx context.Context) ([]DelayedJobView, error) {
+	pairs, err := q.Client.ZRangeWithScores(ctx, "jobs:delayed", 0, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	out := make([]DelayedJobView, 0, len(pairs))
+	for _, z := range pairs {
+		id, _ := z.Member.(string)
+		readyAt := int64(z.Score)
+		readyIn := readyAt - now
+		if readyIn < 0 {
+			readyIn = 0
+		}
+		job, err := q.GetJob(ctx, id)
+		if err != nil || job == nil {
+			out = append(out, DelayedJobView{
+				Job:     jobs.Job{ID: id},
+				ReadyAt: readyAt,
+				ReadyIn: readyIn,
+				Orphan:  true,
+			})
+			continue
+		}
+		out = append(out, DelayedJobView{
+			Job:     *job,
+			ReadyAt: readyAt,
+			ReadyIn: readyIn,
+		})
+	}
+	return out, nil
+}
+
+func (q *RedisQueue) ListDeadJobsPage(ctx context.Context, start, count int64) (DeadJobPage, error) {
+	if start < 0 {
+		start = 0
+	}
+	if count <= 0 {
+		count = 50
+	}
+	if count > 100 {
+		count = 100
+	}
+
+	total, err := q.Client.LLen(ctx, "dead_job").Result()
+	if err != nil {
+		return DeadJobPage{}, err
+	}
+
+	end := start + count - 1
+	values, err := q.Client.LRange(ctx, "dead_job", start, end).Result()
+	if err != nil {
+		return DeadJobPage{}, err
+	}
+
+	items := make([]jobs.DeadJob, 0, len(values))
+	for _, v := range values {
+		var d jobs.DeadJob
+		if err := json.Unmarshal([]byte(v), &d); err != nil {
+			continue
+		}
+		items = append(items, d)
+	}
+
+	return DeadJobPage{
+		Items:   items,
+		Total:   total,
+		Start:   start,
+		Count:   int64(len(items)),
+		HasMore: start+int64(len(items)) < total,
 	}, nil
 }

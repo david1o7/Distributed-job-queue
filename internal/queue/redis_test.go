@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func readyLen(ctx context.Context, q *RedisQueue) int64 {
+	var total int64
+	for _, key := range jobs.AllReadyQueues() {
+		n, err := q.Client.LLen(ctx, key).Result()
+		if err == nil {
+			total += n
+		}
+	}
+	return total
+}
+
+func lenKey(ctx context.Context, q *RedisQueue, key string) int64 {
+	n, _ := q.Client.LLen(ctx, key).Result()
+	return n
+}
+
 func testQueue(t *testing.T) (*RedisQueue, *miniredis.Miniredis) {
 	t.Helper()
 	mr, err := miniredis.Run()
@@ -21,9 +37,7 @@ func testQueue(t *testing.T) (*RedisQueue, *miniredis.Miniredis) {
 
 func TestClaimAndAck(t *testing.T) {
 	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer mr.Close()
 
 	q := NewRedisQueue(mr.Addr())
@@ -39,20 +53,16 @@ func TestClaimAndAck(t *testing.T) {
 	require.NoError(t, q.Push(ctx, job))
 	require.NoError(t, q.SaveJob(ctx, job))
 
-	// Act
 	claimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "job-1", claimed.ID)
 
-	// Assert: job is now in the processing set
 	ids, err := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NoError(t, err)
 	require.Contains(t, ids, "job-1")
 
-	// Act: Ack
 	require.NoError(t, q.ACK(ctx, "job-1"))
 
-	// Assert: removed from processing
 	ids, err = q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NoError(t, err)
 	require.NotContains(t, ids, "job-1")
@@ -60,18 +70,17 @@ func TestClaimAndAck(t *testing.T) {
 
 func TestReapExpiredRedeliversJob(t *testing.T) {
 	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer mr.Close()
 
 	q := NewRedisQueue(mr.Addr())
 	ctx := context.Background()
 
 	job := jobs.Job{
-		ID:     "job-timeout",
-		Type:   "print",
-		Status: jobs.StatusProcessing,
+		ID:       "job-timeout",
+		Type:     "print",
+		Status:   jobs.StatusProcessing,
+		Priority: jobs.PriorityDefault,
 	}
 	require.NoError(t, q.SaveJob(ctx, job))
 
@@ -85,9 +94,7 @@ func TestReapExpiredRedeliversJob(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, reaped)
 
-	length, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), length)
+	require.Equal(t, int64(1), readyLen(ctx, q))
 
 	ids, _ := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NotContains(t, ids, "job-timeout")
@@ -95,9 +102,7 @@ func TestReapExpiredRedeliversJob(t *testing.T) {
 
 func TestNackReturnsJobToQueue(t *testing.T) {
 	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer mr.Close()
 
 	q := NewRedisQueue(mr.Addr())
@@ -108,6 +113,7 @@ func TestNackReturnsJobToQueue(t *testing.T) {
 		Type:       "print",
 		RetryCount: 1,
 		Status:     jobs.StatusRetrying,
+		Priority:   jobs.PriorityDefault,
 	}
 	require.NoError(t, q.SaveJob(ctx, job))
 
@@ -121,16 +127,13 @@ func TestNackReturnsJobToQueue(t *testing.T) {
 	ids, _ := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NotContains(t, ids, "job-nack")
 
-	length, _ := q.Client.LLen(ctx, "jobs").Result()
-	require.Equal(t, int64(1), length)
+	require.Equal(t, int64(1), readyLen(ctx, q))
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:default"))
 }
 
 func TestMaxRetriesMovesToDLQAndAcks(t *testing.T) {
-
 	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer mr.Close()
 
 	q := NewRedisQueue(mr.Addr())
@@ -168,9 +171,7 @@ func TestMaxRetriesMovesToDLQAndAcks(t *testing.T) {
 
 func TestClaimRemovesJobFromMainQueue(t *testing.T) {
 	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer mr.Close()
 
 	q := NewRedisQueue(mr.Addr())
@@ -187,9 +188,7 @@ func TestClaimRemovesJobFromMainQueue(t *testing.T) {
 	require.NoError(t, q.Push(ctx, job))
 	require.NoError(t, q.SaveJob(ctx, job))
 
-	length, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), length)
+	require.Equal(t, int64(1), readyLen(ctx, q))
 
 	claimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
@@ -199,9 +198,7 @@ func TestClaimRemovesJobFromMainQueue(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, ids, "job-claim-once")
 
-	length, err = q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(0), length, "after Claim the job must leave the main queue")
+	require.Equal(t, int64(0), readyLen(ctx, q), "after Claim the job must leave ready queues")
 }
 
 func TestScheduleMovesJobToDelayedAndRemovesFromProcessing(t *testing.T) {
@@ -220,21 +217,17 @@ func TestScheduleMovesJobToDelayedAndRemovesFromProcessing(t *testing.T) {
 	}
 	require.NoError(t, q.SaveJob(ctx, job))
 
-	// Simulate that it was in processing
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
 		Score:  float64(time.Now().Add(30 * time.Second).Unix()),
 		Member: job.ID,
 	}).Err())
 
-	// Act
 	require.NoError(t, q.Schedule(ctx, job, 10*time.Second))
 
-	// Assert: removed from processing
 	ids, err := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NoError(t, err)
 	require.NotContains(t, ids, job.ID)
 
-	// Assert: present in delayed set
 	delayed, err := q.Client.ZRange(ctx, "jobs:delayed", 0, -1).Result()
 	require.NoError(t, err)
 	require.Contains(t, delayed, job.ID)
@@ -248,35 +241,28 @@ func TestMoveReadyDelayedJobsOnlyMovesReadyOnes(t *testing.T) {
 	q := NewRedisQueue(mr.Addr())
 	ctx := context.Background()
 
-	readyJob := jobs.Job{ID: "ready-job", Type: "print", Status: jobs.StatusRetrying}
-	futureJob := jobs.Job{ID: "future-job", Type: "print", Status: jobs.StatusRetrying}
+	readyJob := jobs.Job{ID: "ready-job", Type: "print", Status: jobs.StatusRetrying, Priority: jobs.PriorityDefault}
+	futureJob := jobs.Job{ID: "future-job", Type: "print", Status: jobs.StatusRetrying, Priority: jobs.PriorityDefault}
 
 	require.NoError(t, q.SaveJob(ctx, readyJob))
 	require.NoError(t, q.SaveJob(ctx, futureJob))
 
-	// readyJob score = past
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
 		Score:  float64(time.Now().Add(-5 * time.Second).Unix()),
 		Member: readyJob.ID,
 	}).Err())
 
-	// futureJob score = future
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
 		Score:  float64(time.Now().Add(10 * time.Minute).Unix()),
 		Member: futureJob.ID,
 	}).Err())
 
-	// Act
 	moved, err := q.MoveReadyDelayedJobs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, moved)
 
-	// Assert: ready job is now on main queue
-	length, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), length)
+	require.Equal(t, int64(1), readyLen(ctx, q))
 
-	// Assert: future job still delayed
 	delayed, err := q.Client.ZRange(ctx, "jobs:delayed", 0, -1).Result()
 	require.NoError(t, err)
 	require.Contains(t, delayed, futureJob.ID)
@@ -284,7 +270,6 @@ func TestMoveReadyDelayedJobsOnlyMovesReadyOnes(t *testing.T) {
 }
 
 func TestCrashRecovery_ReaperRedeliversInFlightJob(t *testing.T) {
-	// Simulates: worker claimed job, then process died before ACK/Schedule.
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	defer mr.Close()
@@ -293,33 +278,28 @@ func TestCrashRecovery_ReaperRedeliversInFlightJob(t *testing.T) {
 	ctx := context.Background()
 
 	job := jobs.Job{
-		ID:     "crashed-job",
-		Type:   "print",
-		Status: jobs.StatusProcessing,
+		ID:       "crashed-job",
+		Type:     "print",
+		Status:   jobs.StatusProcessing,
+		Priority: jobs.PriorityDefault,
 	}
 	require.NoError(t, q.SaveJob(ctx, job))
 
-	// Job is in processing with an already-expired visibility timeout
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Minute).Unix()),
 		Member: job.ID,
 	}).Err())
 
-	// Act – reaper runs (as it would after a crash)
 	reaped, err := q.ReapExpired(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, reaped)
 
-	// Assert: job is back on the main queue and no longer in processing
-	length, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), length)
+	require.Equal(t, int64(1), readyLen(ctx, q))
 
 	ids, err := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NoError(t, err)
 	require.NotContains(t, ids, job.ID)
 
-	// Assert: it can be claimed again
 	claimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "crashed-job", claimed.ID)
@@ -334,7 +314,7 @@ func TestCrashRecovery_MultipleExpiredJobs(t *testing.T) {
 	ctx := context.Background()
 
 	for _, id := range []string{"c1", "c2", "c3"} {
-		job := jobs.Job{ID: id, Type: "print", Status: jobs.StatusProcessing}
+		job := jobs.Job{ID: id, Type: "print", Status: jobs.StatusProcessing, Priority: jobs.PriorityDefault}
 		require.NoError(t, q.SaveJob(ctx, job))
 		require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
 			Score:  float64(time.Now().Add(-30 * time.Second).Unix()),
@@ -346,13 +326,10 @@ func TestCrashRecovery_MultipleExpiredJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, reaped)
 
-	length, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(3), length)
+	require.Equal(t, int64(3), readyLen(ctx, q))
 }
 
 func TestDelayedRetryFullCycle(t *testing.T) {
-	
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	defer mr.Close()
@@ -367,39 +344,34 @@ func TestDelayedRetryFullCycle(t *testing.T) {
 		Status:     jobs.StatusQueued,
 		RetryCount: 0,
 		CreatedAt:  time.Now().UTC(),
+		Priority:   jobs.PriorityDefault,
 	}
 	require.NoError(t, q.Push(ctx, original))
 	require.NoError(t, q.SaveJob(ctx, original))
 
-	
 	claimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "retry-cycle", claimed.ID)
 
-	
 	claimed.RetryCount++
 	claimed.Status = jobs.StatusRetrying
 	require.NoError(t, q.Schedule(ctx, *claimed, 1*time.Second))
 
-	
 	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Second).Unix()),
 		Member: claimed.ID,
 	}).Err())
 
-	
 	moved, err := q.MoveReadyDelayedJobs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, moved)
 
-	
 	reclaimed, err := q.Claim(ctx, 30*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "retry-cycle", reclaimed.ID)
 }
 
 func TestMoveReadyDelayedJobsCleansOrphanedEntries(t *testing.T) {
-	
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	defer mr.Close()
@@ -414,9 +386,8 @@ func TestMoveReadyDelayedJobsCleansOrphanedEntries(t *testing.T) {
 
 	moved, err := q.MoveReadyDelayedJobs(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 0, moved) 
+	require.Equal(t, 0, moved)
 
-	
 	delayed, err := q.Client.ZRange(ctx, "jobs:delayed", 0, -1).Result()
 	require.NoError(t, err)
 	require.NotContains(t, delayed, "orphan-job")
@@ -437,8 +408,8 @@ func TestReaperCleansOrphanedProcessingEntries(t *testing.T) {
 
 	reaped, err := q.ReapExpired(ctx)
 	require.NoError(t, err)
-	
-	_ = reaped
+
+	require.Equal(t, 0, reaped)
 
 	ids, err := q.Client.ZRange(ctx, "jobs:processing", 0, -1).Result()
 	require.NoError(t, err)
@@ -446,7 +417,7 @@ func TestReaperCleansOrphanedProcessingEntries(t *testing.T) {
 }
 
 func TestExtendVisibility(t *testing.T) {
-	q, mr := testQueue(t) // use helper from earlier, or inline miniredis
+	q, mr := testQueue(t)
 	defer mr.Close()
 	ctx := context.Background()
 
@@ -468,7 +439,6 @@ func TestExtendVisibility(t *testing.T) {
 func TestExtendVisibilityMissingJob(t *testing.T) {
 	q, mr := testQueue(t)
 	defer mr.Close()
-	
 	require.NoError(t, q.ExtendVisibility(context.Background(), "missing", 30*time.Second))
 }
 
@@ -498,19 +468,17 @@ func TestAcquireAndReleaseConcurrency(t *testing.T) {
 	defer mr.Close()
 	ctx := context.Background()
 
-	// unlimited
 	ok, err := q.AcquireConcurrency(ctx, "unlimited", 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// limit 1
 	ok, err = q.AcquireConcurrency(ctx, "print", 1)
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	ok, err = q.AcquireConcurrency(ctx, "print", 1)
 	require.NoError(t, err)
-	require.False(t, ok) // limit reached
+	require.False(t, ok)
 
 	require.NoError(t, q.ReleaseConcurrency(ctx, "print"))
 
@@ -536,13 +504,13 @@ func TestReplayDeadJobLua_Success(t *testing.T) {
 			RetryCount: 3,
 			MaxRetries: 3,
 			CreatedAt:  time.Now().UTC(),
+			Priority:   jobs.PriorityDefault,
 		},
 		FailureReason: "boom",
 		FailedAt:      time.Now().UTC(),
 	}
 	require.NoError(t, q.MoveToDeadLetter(ctx, dead))
 
-	// sanity
 	list, err := q.ListDeadJobs(ctx)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
@@ -553,17 +521,13 @@ func TestReplayDeadJobLua_Success(t *testing.T) {
 	require.Equal(t, jobs.StatusQueued, job.Status)
 	require.Equal(t, 0, job.RetryCount)
 
-	// removed from DLQ
 	list, err = q.ListDeadJobs(ctx)
 	require.NoError(t, err)
 	require.Len(t, list, 0)
 
-	// on main queue
-	n, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), n)
+	require.Equal(t, int64(1), readyLen(ctx, q))
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:default"))
 
-	// persisted state
 	stored, err := q.GetJob(ctx, "dead-1")
 	require.NoError(t, err)
 	require.Equal(t, jobs.StatusQueued, stored.Status)
@@ -599,9 +563,10 @@ func TestReplayDeadJobLua_ConcurrentSecondCallFails(t *testing.T) {
 
 	dead := jobs.DeadJob{
 		Job: jobs.Job{
-			ID:     "dead-once",
-			Type:   "print",
-			Status: jobs.StatusFailed,
+			ID:       "dead-once",
+			Type:     "print",
+			Status:   jobs.StatusFailed,
+			Priority: jobs.PriorityDefault,
 		},
 		FailureReason: "x",
 		FailedAt:      time.Now().UTC(),
@@ -612,14 +577,10 @@ func TestReplayDeadJobLua_ConcurrentSecondCallFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "dead-once", job.ID)
 
-	// second replay must not find it
 	_, err = q.ReplayDeadJob(ctx, "dead-once")
 	require.ErrorIs(t, err, redis.Nil)
 
-	// still only one copy on main queue
-	n, err := q.Client.LLen(ctx, "jobs").Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(1), n)
+	require.Equal(t, int64(1), readyLen(ctx, q))
 }
 
 func TestReplayDeadJobLua_IgnoresInvalidJSONInDLQ(t *testing.T) {
@@ -630,14 +591,14 @@ func TestReplayDeadJobLua_IgnoresInvalidJSONInDLQ(t *testing.T) {
 	q := NewRedisQueue(mr.Addr())
 	ctx := context.Background()
 
-	// junk entry
 	require.NoError(t, q.Client.LPush(ctx, "dead_job", "not-json").Err())
 
 	dead := jobs.DeadJob{
 		Job: jobs.Job{
-			ID:     "good-dead",
-			Type:   "print",
-			Status: jobs.StatusFailed,
+			ID:       "good-dead",
+			Type:     "print",
+			Status:   jobs.StatusFailed,
+			Priority: jobs.PriorityDefault,
 		},
 		FailureReason: "x",
 		FailedAt:      time.Now().UTC(),
@@ -647,4 +608,77 @@ func TestReplayDeadJobLua_IgnoresInvalidJSONInDLQ(t *testing.T) {
 	job, err := q.ReplayDeadJob(ctx, "good-dead")
 	require.NoError(t, err)
 	require.Equal(t, "good-dead", job.ID)
+}
+
+// ---- Priority alignment tests ----
+
+func TestPushRoutesByPriority(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "h", Type: "print", Priority: jobs.PriorityHigh}))
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "d", Type: "print", Priority: jobs.PriorityDefault}))
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "l", Type: "print", Priority: jobs.PriorityLow}))
+
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:high"))
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:default"))
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:low"))
+	require.Equal(t, int64(0), lenKey(ctx, q, "jobs"), "legacy list must stay unused")
+	require.Equal(t, int64(3), readyLen(ctx, q))
+}
+
+func TestClaimPrefersHighOverLow(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "low-1", Type: "print", Priority: jobs.PriorityLow}))
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "high-1", Type: "print", Priority: jobs.PriorityHigh}))
+
+	claimed, err := q.Claim(ctx, 30*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "high-1", claimed.ID)
+
+	claimed2, err := q.Claim(ctx, 30*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "low-1", claimed2.ID)
+}
+
+func TestNackPreservesHighPriority(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	job := jobs.Job{
+		ID:       "p1",
+		Type:     "print",
+		Priority: jobs.PriorityHigh,
+		Status:   jobs.StatusProcessing,
+	}
+	require.NoError(t, q.SaveJob(ctx, job))
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
+		Score:  float64(time.Now().Add(30 * time.Second).Unix()),
+		Member: job.ID,
+	}).Err())
+
+	require.NoError(t, q.Nack(ctx, job))
+
+	require.Equal(t, int64(1), lenKey(ctx, q, "jobs:high"))
+	require.Equal(t, int64(0), lenKey(ctx, q, "jobs:default"))
+	require.Equal(t, int64(0), lenKey(ctx, q, "jobs:low"))
+}
+
+func TestEmptyPriorityNormalizesToDefault(t *testing.T) {
+	require.Equal(t, jobs.PriorityDefault, jobs.NormalizePriority(""))
+	require.Equal(t, "jobs:default", jobs.QueueKeyFor(""))
 }

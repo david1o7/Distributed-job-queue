@@ -29,7 +29,7 @@ func TestRegistryExecute(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestHandlerDoesFail(t *testing.T){
+func TestHandlerDoesFail(t *testing.T) {
 	r := NewRegistry()
 	r.Register("fail", errHandler{})
 

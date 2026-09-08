@@ -13,7 +13,7 @@ func TestLoadDefaultsAndEnv(t *testing.T) {
 	t.Setenv("REDIS_ADDR", "redis:6379")
 	t.Setenv("WORKER_COUNT", "4")
 	t.Setenv("MAX_RETRIES", "5")
-	t.Setenv("CONFIG_FILE", "") 
+	t.Setenv("CONFIG_FILE", "")
 
 	_ = os.Unsetenv("CONFIG_FILE")
 
@@ -53,8 +53,8 @@ func TestLoadFileThenEnvOverride(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	t.Setenv("CONFIG_FILE", path)
-	t.Setenv("REDIS_ADDR", "env-redis:6379") 
-	t.Setenv("WORKER_COUNT", "")            
+	t.Setenv("REDIS_ADDR", "env-redis:6379")
+	t.Setenv("WORKER_COUNT", "")
 	_ = os.Unsetenv("WORKER_COUNT")
 
 	cfg, err := Load()

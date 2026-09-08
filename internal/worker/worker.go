@@ -110,14 +110,13 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 					"type", Recievedjob.Type,
 					"limit", limit,
 				)
-				
+
 				_ = w.Queue.Nack(ctx, Recievedjob)
-				
+
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 
-			
 			defer func() {
 				if err := w.Queue.ReleaseConcurrency(ctx, Recievedjob.Type); err != nil {
 					logger.Log.Error("Failed to release concurrency slot",
@@ -129,7 +128,7 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 			}()
 
 			if Recievedjob.IdempotencyKey != "" {
-				
+
 				fullKey := Recievedjob.Type + ":" + Recievedjob.IdempotencyKey
 
 				processed, err := w.Queue.IsProcessed(ctx, fullKey)
@@ -139,7 +138,7 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 						"key", fullKey,
 						"error", err,
 					)
-					
+
 					_ = w.Queue.Nack(ctx, Recievedjob)
 					continue
 				}
@@ -152,7 +151,6 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 						"idempotency_key", Recievedjob.IdempotencyKey,
 					)
 
-					
 					Recievedjob.Status = jobs.StatusCompleted
 					_ = w.Queue.SaveJob(ctx, Recievedjob)
 					_ = w.Queue.ACK(ctx, Recievedjob.ID)
@@ -194,7 +192,7 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 					delay := retry.CalculateBackOff(Recievedjob.RetryCount)
 
 					Recievedjob.NextRetry = time.Now().UTC().Add(delay)
-					
+
 					Recievedjob.FinishedAt = time.Now().UTC()
 					Recievedjob.Status = jobs.StatusRetrying
 
@@ -286,7 +284,7 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 
 			metrics.JobsCompleted.Inc()
 			metrics.JobDuration.WithLabelValues(Recievedjob.Type, "completed").Observe(duration)
-			
+
 			_ = w.Queue.SaveJob(ctx, Recievedjob)
 
 			if Recievedjob.IdempotencyKey != "" {
