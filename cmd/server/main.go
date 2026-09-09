@@ -10,12 +10,15 @@ import (
 	"distributed-job-system/internal/producer"
 	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/worker"
+
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"distributed-job-system/internal/drivers/rabbit"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -119,6 +122,20 @@ func main() {
 	)
 	metrics.Init()
 
+	rb, err := rabbit.New(cfg.RabbitURL)
+	if err != nil {
+		log.Fatalf("rabbit: %v", err)
+	}
+	defer func() {
+
+		if err := rb.Close(context.Background()); err != nil {
+			logger.Log.Error(
+				"Closing RabbitMq connection",
+				"Error", err,
+			)
+		}
+	}()
+
 	REDIS_ADDR := os.Getenv("REDIS_ADDR")
 	q := queue.NewRedisQueue(REDIS_ADDR)
 
@@ -153,7 +170,7 @@ func main() {
 
 	mux.HandleFunc("/job", producer.Handler(q))
 	mux.HandleFunc("/jobs/", handlers.GetJobHandler(q))
-	mux.HandleFunc("/dead-jobs", handlers.DeadJobHandler(q))
+	mux.HandleFunc("/dead-jobs/all", handlers.DeadJobHandler(q))
 	mux.HandleFunc("/dead-jobs/{id}/replay", handlers.ReplayDeadJobHandler(q))
 	mux.HandleFunc("/delayed-jobs", handlers.DelayedJobsHandler(q))
 	mux.HandleFunc("/dead-jobs", handlers.DeadJobsPagedHandler(q))
