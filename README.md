@@ -8,6 +8,12 @@ It turns “run this work later, safely, under failure” into an explicit syste
 
 ---
 
+## System Architecture for Kue
+
+<p align="center">
+  <img src="docs/Kue.png" alt="Kue Architecture Diagram" width="500">
+</p>
+
 ## The narrative: the evolution of Kue (STAR)
 
 ### Situation
