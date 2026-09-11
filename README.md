@@ -1,12 +1,21 @@
 
 # Kue — An Evolutionary, Multi-Interface Distributed Job Queue
+Kue is a distributed job orchestration engine built in Go that transforms asynchronous task execution into an explicit systems problem. It simplifies complex background processing by natively managing leases, retries, priorities, and broker trade-offs, turning the challenge of "run this work later, safely, under failure" into a reliable, declarative operation.
 
-**Kue** is a distributed job orchestration engine still in progress and written in **Go**, with execution routes over **Redis**, **RabbitMQ**, and **Apache Kafka** with a common interface **Job Service** that contains all the specified functionality a broker must have natively to be able run the orchestration (`Push/Claim/ACK/Nack/Schedule`) and **job Store** which persists job status currently implemented with **Redis** and later **Postgres**, job enqueuing is done with Saving the job state in the job store b4 pushing to Message Broker (Redis/RabbitMQ/Apache Kafka)packaged with **Docker** for reproducible ops.  
-It turns “run this work later, safely, under failure” into an explicit systems problem—leases, retries, priorities, and broker trade-offs.
+## Core Architecture
+
+* Unified Interface: The core JobService abstracts the native capabilities required by a broker, strictly enforcing standard orchestration semantics: Push, Claim, ACK, Nack, and Schedule.
+* Pluggable Message Brokers: Execution routes are driven via interchangeable backends, currently supporting Redis, RabbitMQ, and Apache Kafka.
+* Dual-Layer Persistence: Reliability is guaranteed by a JobStore that saves the job state before it is ever pushed to the message broker. This layer is currently backed by Redis, with a PostgreSQL implementation in progress.
+
+## Project Status & Operations
+
+* 🛠️ Status: Currently in active development (Work in Progress).
+* 🐋 Ops-Ready: Fully packaged with Docker for predictable, reproducible deployments across environments.
 
 `61%+ Automated Test Coverage (Unit & Integration)` · `Production-Scale Simulation (k6)` · `Go · Redis · Lua · Docker · Prometheus`
 
-**k6 test** achieved a 13ms p(95) latency with a sustained peak target of 300 Requests Per Second (RPS)
+* The **k6 test** - achieved a sub 10ms p(95) latency with a sustained peak target of 300 Requests Per Second (RPS)
 ---
 
 ## System Architecture for Kue
