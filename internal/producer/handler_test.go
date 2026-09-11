@@ -2,6 +2,7 @@ package producer
 
 import (
 	"bytes"
+	"distributed-job-system/internal/jobservice"
 	"distributed-job-system/internal/queue"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +18,13 @@ func TestProducerHandler(t *testing.T) {
 	defer mr.Close()
 
 	q := queue.NewRedisQueue(mr.Addr())
+	jobS := jobservice.New(q,q)
 	body := []byte(`{"type":"print","payload":{"name":"x"}}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	Handler(q).ServeHTTP(rr, req)
+	Handler(jobS).ServeHTTP(rr, req)
 	require.True(t, rr.Code == http.StatusOK || rr.Code == http.StatusAccepted || rr.Code == http.StatusCreated)
 }

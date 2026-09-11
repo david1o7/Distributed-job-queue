@@ -14,6 +14,22 @@ services:
       retries: 10
     restart: unless-stopped
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: djq-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # management UI (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -22,16 +38,24 @@ services:
     ports:
       - "8080:8080"
     environment:
+      HTTP_ADDR: ":8080"
       REDIS_ADDR: redis:6379
+      # Transport: redis | rabbitmq
+      BROKER: rabbitmq
+      RABBIT_URL: amqp://guest:guest@rabbitmq:5672/
       WORKER_COUNT: "3"
       MAX_RETRIES: "3"
       VISIBILITY_TIMEOUT: "30s"
-      HTTP_ADDR: ":8080"
+      REAPER_INTERVAL: "5s"
+      DELAYED_MOVER_INTERVAL: "2s"
+      METRICS_INTERVAL: "2s"
       APP_ENV: production
       LOG_FORMAT: json
       LOG_LEVEL: info
     depends_on:
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
 
@@ -41,24 +65,12 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     depends_on:
       - app
     restart: unless-stopped
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+
   grafana:
     image: grafana/grafana:11.2.0
     container_name: djq-grafana

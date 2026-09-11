@@ -23,8 +23,8 @@ type Config struct {
 	LogFormat  string `json:"log_format"`
 	LogLevel   string `json:"log_level"`
 	ConfigFile string `json:"-"`
-	Broker     string `json:"broker"`
 
+	Broker       string `json:"broker"` // redis | rabbitmq | kafka
 	RabbitURL    string `json:"rabbit_url"`
 	KafkaBrokers string `json:"kafka_brokers"`
 	KafkaTopic   string `json:"kafka_topic"`
@@ -39,6 +39,12 @@ type fileConfig struct {
 	ReaperInterval       string `json:"reaper_interval"`
 	DelayedMoverInterval string `json:"delayed_mover_interval"`
 	MetricsInterval      string `json:"metrics_interval"`
+	LogFormat            string `json:"log_format"`
+	LogLevel             string `json:"log_level"`
+	Broker               string `json:"broker"`
+	RabbitURL            string `json:"rabbit_url"`
+	KafkaBrokers         string `json:"kafka_brokers"`
+	KafkaTopic           string `json:"kafka_topic"`
 }
 
 func Load() (*Config, error) {
@@ -51,18 +57,15 @@ func Load() (*Config, error) {
 		}
 		cfg.ConfigFile = path
 	} else if os.Getenv("CONFIG_FILE") != "" {
-
 		return nil, fmt.Errorf("CONFIG_FILE=%s: %w", path, err)
 	}
 
 	if err := applyEnv(cfg); err != nil {
 		return nil, err
 	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-
 	return cfg, nil
 }
 
@@ -78,6 +81,10 @@ func defaults() *Config {
 		MetricsInterval:      2 * time.Second,
 		LogFormat:            "text",
 		LogLevel:             "info",
+		Broker:               "redis",
+		RabbitURL:            "amqp://guest:guest@localhost:5672/",
+		KafkaBrokers:         "localhost:9092",
+		KafkaTopic:           "jobs",
 	}
 }
 
@@ -86,7 +93,6 @@ func loadFile(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-
 	var fc fileConfig
 	if err := json.Unmarshal(data, &fc); err != nil {
 		return fmt.Errorf("parse json: %w", err)
@@ -132,7 +138,24 @@ func loadFile(path string, cfg *Config) error {
 		}
 		cfg.MetricsInterval = d
 	}
-
+	if fc.LogFormat != "" {
+		cfg.LogFormat = fc.LogFormat
+	}
+	if fc.LogLevel != "" {
+		cfg.LogLevel = fc.LogLevel
+	}
+	if fc.Broker != "" {
+		cfg.Broker = strings.ToLower(strings.TrimSpace(fc.Broker))
+	}
+	if fc.RabbitURL != "" {
+		cfg.RabbitURL = fc.RabbitURL
+	}
+	if fc.KafkaBrokers != "" {
+		cfg.KafkaBrokers = fc.KafkaBrokers
+	}
+	if fc.KafkaTopic != "" {
+		cfg.KafkaTopic = fc.KafkaTopic
+	}
 	return nil
 }
 
@@ -143,7 +166,6 @@ func applyEnv(cfg *Config) error {
 	if v := os.Getenv("REDIS_ADDR"); v != "" {
 		cfg.RedisAddr = v
 	}
-
 	if v := os.Getenv("WORKER_COUNT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -151,7 +173,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.WorkerCount = n
 	}
-
 	if v := os.Getenv("MAX_RETRIES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -159,7 +180,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.MaxRetries = n
 	}
-
 	if v := os.Getenv("VISIBILITY_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -167,7 +187,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.VisibilityTimeout = d
 	}
-
 	if v := os.Getenv("REAPER_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -175,7 +194,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.ReaperInterval = d
 	}
-
 	if v := os.Getenv("DELAYED_MOVER_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -183,7 +201,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.DelayedMoverInterval = d
 	}
-
 	if v := os.Getenv("METRICS_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -191,15 +208,24 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.MetricsInterval = d
 	}
-
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
 		cfg.LogFormat = v
 	}
-
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
-
+	if v := os.Getenv("BROKER"); v != "" {
+		cfg.Broker = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v := os.Getenv("RABBIT_URL"); v != "" {
+		cfg.RabbitURL = v
+	}
+	if v := os.Getenv("KAFKA_BROKERS"); v != "" {
+		cfg.KafkaBrokers = v
+	}
+	if v := os.Getenv("KAFKA_TOPIC"); v != "" {
+		cfg.KafkaTopic = v
+	}
 	return nil
 }
 
@@ -230,9 +256,30 @@ func (c *Config) Validate() error {
 	if c.MetricsInterval <= 0 {
 		errs = append(errs, "metrics_interval must be > 0")
 	}
-
 	if c.VisibilityTimeout < c.ReaperInterval {
 		errs = append(errs, "visibility_timeout should be >= reaper_interval")
+	}
+
+	broker := strings.ToLower(strings.TrimSpace(c.Broker))
+	if broker == "" {
+		broker = "redis"
+		c.Broker = "redis"
+	}
+	switch broker {
+	case "redis", "rabbitmq", "rabbit", "kafka":
+		c.Broker = broker
+	default:
+		errs = append(errs, fmt.Sprintf("broker must be redis|rabbitmq|kafka (got %q)", c.Broker))
+	}
+	if broker == "rabbitmq" || broker == "rabbit" {
+		if strings.TrimSpace(c.RabbitURL) == "" {
+			errs = append(errs, "rabbit_url is required when broker=rabbitmq")
+		}
+	}
+	if broker == "kafka" {
+		if strings.TrimSpace(c.KafkaBrokers) == "" {
+			errs = append(errs, "kafka_brokers is required when broker=kafka")
+		}
 	}
 
 	if len(errs) > 0 {

@@ -2,169 +2,156 @@ package worker
 
 import (
 	"context"
-	// "errors"
-	// "math/rand"
+	"time"
 
+	"distributed-job-system/internal/broker"
 	"distributed-job-system/internal/jobs"
 	"distributed-job-system/internal/logger"
 	"distributed-job-system/internal/metrics"
-	"distributed-job-system/internal/queue"
 	"distributed-job-system/internal/retry"
-	"time"
 )
 
 type Worker struct {
 	ID         int
-	Queue      *queue.RedisQueue
+	Queue      broker.Queue
+	Store      broker.JobStore
 	MaxRetries int
 }
 
-func NewWorker(id int, q *queue.RedisQueue, maxRetries int) *Worker {
-
+func NewWorker(id int, q broker.Queue, store broker.JobStore, maxRetries int) *Worker {
 	return &Worker{
 		ID:         id,
 		Queue:      q,
+		Store:      store,
 		MaxRetries: maxRetries,
 	}
 }
 
 func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Duration) {
-
 	logger.Log.Info(
-		"Worker started",
+		"Worker started", 
 		"worker", w.ID,
 	)
 
 	for {
-
 		select {
-
 		case <-ctx.Done():
 			logger.Log.Info(
-				"Worker shutting Down!",
+				"Worker shutting Down!", 
 				"worker", w.ID,
 			)
-
 			return
-
 		default:
 			job, err := w.Queue.Claim(ctx, timeOut)
-
 			if err != nil {
 				if ctx.Err() != nil {
-					logger.Log.Error(
-						"Background Context Error",
-						"Err", ctx.Err(),
-					)
 					return
 				}
-
 				logger.Log.Error(
-					"Failed to claim job",
-					"worker", w.ID,
+					"Failed to claim job", 
+					"worker", w.ID, 
 					"error", err,
 				)
-
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			Recievedjob := *job
-			Recievedjob.CreatedAt = time.Now()
-			Recievedjob.WorkerID = w.ID
-			Recievedjob.StartedAt = time.Now().UTC()
-			Recievedjob.FinishedAt = time.Time{}
-			Recievedjob.MaxRetries = w.MaxRetries
+			if existing, gerr := w.Store.Get(ctx, job.ID); gerr != nil || existing == nil {
+				_ = w.Store.Save(ctx, *job)
+			}
 
-			if err = w.Queue.SaveJob(ctx, Recievedjob); err != nil {
+			received := *job
+			received.WorkerID = w.ID
+			received.StartedAt = time.Now().UTC()
+			received.FinishedAt = time.Time{}
+			received.MaxRetries = w.MaxRetries
+			received.Status = jobs.StatusProcessing
+
+			if err = w.Store.Save(ctx, received); err != nil {
 				logger.Log.Error(
-					"Failed to Save job",
-					"Job ID", Recievedjob.ID,
+					"Failed to Save job", 
+					"Job ID", received.ID, 
 					"error", err,
 				)
-				job = &Recievedjob
-				_ = w.Queue.Nack(ctx, *job)
+				_ = w.Queue.Nack(ctx, received)
 				continue
 			}
 
 			metrics.JobsProcessing.Inc()
 
-			limit := GetConcurrencyLimit(Recievedjob.Type)
-			acquired, err := w.Queue.AcquireConcurrency(ctx, Recievedjob.Type, limit)
-			if err != nil {
-				logger.Log.Error("Failed to acquire concurrency slot",
-					"job", Recievedjob.ID,
-					"type", Recievedjob.Type,
-					"error", err,
-				)
-				_ = w.Queue.Nack(ctx, Recievedjob)
-				continue
-			}
-
-			if !acquired {
-				metrics.JobsConcurrencyLimited.Inc()
-
-				logger.Log.Info("Concurrency limit reached, requeueing",
-					"worker", w.ID,
-					"job", Recievedjob.ID,
-					"type", Recievedjob.Type,
-					"limit", limit,
-				)
-
-				_ = w.Queue.Nack(ctx, Recievedjob)
-
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			defer func() {
-				if err := w.Queue.ReleaseConcurrency(ctx, Recievedjob.Type); err != nil {
-					logger.Log.Error("Failed to release concurrency slot",
-						"job", Recievedjob.ID,
-						"type", Recievedjob.Type,
-						"error", err,
+			if lim, ok := w.Queue.(broker.ConcurrencyLimiter); ok {
+				limit := GetConcurrencyLimit(received.Type)
+				acquired, aerr := lim.AcquireConcurrency(ctx, received.Type, limit)
+				if aerr != nil {
+					logger.Log.Error(
+						"Failed to acquire concurrency slot",
+						"job", received.ID, 
+						"type", received.Type, 
+						"error", aerr,
 					)
-				}
-			}()
-
-			if Recievedjob.IdempotencyKey != "" {
-
-				fullKey := Recievedjob.Type + ":" + Recievedjob.IdempotencyKey
-
-				processed, err := w.Queue.IsProcessed(ctx, fullKey)
-				if err != nil {
-					logger.Log.Error("Failed to check idempotency key",
-						"job", Recievedjob.ID,
-						"key", fullKey,
-						"error", err,
-					)
-
-					_ = w.Queue.Nack(ctx, Recievedjob)
+					_ = w.Queue.Nack(ctx, received)
 					continue
 				}
-
-				if processed {
+				if !acquired {
+					metrics.JobsConcurrencyLimited.Inc()
 					logger.Log.Info(
-						"Skipping already processed job (idempotent)",
-						"worker", w.ID,
-						"job", Recievedjob.ID,
-						"idempotency_key", Recievedjob.IdempotencyKey,
+						"Concurrency limit reached, requeueing",
+						"worker", w.ID, 
+						"job", received.ID, 
+						"type", received.Type, 
+						"limit", limit,
 					)
-
-					Recievedjob.Status = jobs.StatusCompleted
-					_ = w.Queue.SaveJob(ctx, Recievedjob)
-					_ = w.Queue.ACK(ctx, Recievedjob.ID)
-					metrics.JobsCompleted.Inc()
+					_ = w.Queue.Nack(ctx, received)
+					time.Sleep(100 * time.Millisecond)
 					continue
+				}
+				defer func(jobType string) {
+					if err := lim.ReleaseConcurrency(context.Background(), jobType); err != nil {
+						logger.Log.Error("Failed to release concurrency slot",
+							"job", received.ID, "type", jobType, "error", err)
+					}
+				}(received.Type)
+			}
+
+			
+			if received.IdempotencyKey != "" {
+				if idemp, ok := w.Queue.(broker.IdempotencyStore); ok {
+					fullKey := received.Type + ":" + received.IdempotencyKey
+					processed, perr := idemp.IsProcessed(ctx, fullKey)
+					if perr != nil {
+						logger.Log.Error(
+							"Failed to check idempotency key",
+							"job", received.ID, 
+							"key", fullKey, 
+							"error", perr,
+						)
+						_ = w.Queue.Nack(ctx, received)
+						continue
+					}
+					if processed {
+						logger.Log.Info(
+							"Skipping already processed job (idempotent)",
+							"worker", w.ID, 
+							"job", received.ID, 
+							"idempotency_key", received.IdempotencyKey,
+						)
+						received.Status = jobs.StatusCompleted
+						received.FinishedAt = time.Now().UTC()
+						_ = w.Store.Save(ctx, received)
+						_ = w.Queue.ACK(ctx, received.ID)
+						metrics.JobsCompleted.Inc()
+						continue
+					}
 				}
 			}
 
 			hbCtx, hbCancel := context.WithCancel(ctx)
-			go w.heartbeat(hbCtx, Recievedjob.ID, timeOut)
+			if _, ok := w.Queue.(broker.VisibilityExtender); ok {
+				go w.heartbeat(hbCtx, received.ID, timeOut)
+			}
 
 			start := time.Now()
-			execerr := registry.Execute(ctx, Recievedjob)
-
+			execerr := registry.Execute(ctx, received)
 			hbCancel()
 
 			duration := time.Since(start).Seconds()
@@ -173,157 +160,128 @@ func (w *Worker) Start(ctx context.Context, registry *Registry, timeOut time.Dur
 			}
 
 			if execerr != nil {
-
 				logger.Log.Error(
 					"Job execution failed",
-					"worker", w.ID,
-					"job", Recievedjob.ID,
-					"error", err,
+					"worker", w.ID, 
+					"job", received.ID, 
+					"error", execerr,
 				)
 
-				Recievedjob.RetryCount++
+				received.RetryCount++
 
-				if Recievedjob.RetryCount <= w.MaxRetries {
-					metrics.JobDuration.WithLabelValues(Recievedjob.Type, "retried").Observe(duration)
+				if received.RetryCount < w.MaxRetries {
+					delay := retry.CalculateBackOff(received.RetryCount)
+					received.NextRetry = time.Now().UTC().Add(delay)
+					received.Status = jobs.StatusRetrying
+					_ = w.Store.Save(ctx, received)
 
 					metrics.JobsRetried.Inc()
 					metrics.JobsScheduled.Inc()
-
-					delay := retry.CalculateBackOff(Recievedjob.RetryCount)
-
-					Recievedjob.NextRetry = time.Now().UTC().Add(delay)
-
-					Recievedjob.FinishedAt = time.Now().UTC()
-					Recievedjob.Status = jobs.StatusRetrying
-
-					metrics.JobsRetried.Inc()
+					metrics.JobDuration.WithLabelValues(received.Type, "retried").Observe(duration)
 
 					logger.Log.Warn(
 						"Job failed, scheduling retry",
 						"worker", w.ID,
-						"job", Recievedjob.ID,
-						"Total retries", Recievedjob.RetryCount,
-						"retry_after", delay,
-						"Status", Recievedjob.Status,
-					)
+						"job", received.ID,
+						"retry_count", received.RetryCount,
+						"retry_after", delay)
 
-					if err := w.Queue.Schedule(ctx, Recievedjob, delay); err != nil {
+					if err := w.Queue.Schedule(ctx, received, delay); err != nil {
 						logger.Log.Error(
 							"Failed to schedule delayed retry",
-							"job", Recievedjob.ID,
+							"job", received.ID, 
 							"error", err,
 						)
-
-						_ = w.Queue.Nack(ctx, Recievedjob)
-						continue
+						_ = w.Queue.Nack(ctx, received)
 					}
-
 					continue
 				}
 
-				Recievedjob.Status = jobs.StatusFailed
-				Recievedjob.FinishedAt = time.Now().UTC()
-
+				received.Status = jobs.StatusFailed
+				received.FinishedAt = time.Now().UTC()
 				metrics.JobsFailed.Inc()
-				metrics.JobDuration.WithLabelValues(Recievedjob.Type, "failed").Observe(duration)
+				metrics.JobDuration.WithLabelValues(received.Type, "failed").Observe(duration)
 
-				err = w.Queue.SaveJob(ctx, Recievedjob)
-
-				if err != nil {
+				if err := w.Store.Save(ctx, received); err != nil {
 					logger.Log.Error(
-						"Failed to Save job",
-						"Job ID", Recievedjob.ID,
+						"Failed to Save job", 
+						"Job ID", received.ID, 
 						"error", err,
 					)
-					return
 				}
 
 				deadJob := jobs.DeadJob{
-
-					Job: Recievedjob,
-
+					Job:           received,
 					FailureReason: execerr.Error(),
-
-					FailedAt: time.Now(),
+					FailedAt:      time.Now().UTC(),
 				}
-
-				logger.Log.Error(
-					"job moved to dead letter queue",
-
-					"worker", w.ID,
-
-					"job_id", Recievedjob.ID,
-
-					"retry_count", Recievedjob.RetryCount,
-
-					"reason", execerr.Error(),
-				)
-
-				if err := w.Queue.MoveToDeadLetter(ctx, deadJob); err != nil {
-
-					logger.Log.Error(
-						"failed moving job to DLQ",
-						"job", Recievedjob.ID,
-						"error", err,
-					)
-				} else {
-					metrics.JobsDeadLetter.Inc()
-
-					logger.Log.Error(
-						"Job moved to dead letter queue",
-						"worker", w.ID,
-						"job", job.ID,
-					)
+				if dl, ok := w.Queue.(broker.DeadLetter); ok {
+					if err := dl.MoveToDeadLetter(ctx, deadJob); err != nil {
+						logger.Log.Error(
+							"failed moving job to DLQ", 
+							"job", received.ID, 
+							"error", err,
+						)
+					} else {
+						metrics.JobsDeadLetter.Inc()
+						logger.Log.Error(
+							"Job moved to dead letter queue",
+							"worker", w.ID, 
+							"job", received.ID,
+						)
+					}
 				}
-				_ = w.Queue.ACK(ctx, Recievedjob.ID)
+				_ = w.Queue.ACK(ctx, received.ID)
 				continue
 			}
 
-			Recievedjob.Status = jobs.StatusCompleted
-			Recievedjob.FinishedAt = time.Now().UTC()
-
+			
+			received.Status = jobs.StatusCompleted
+			received.FinishedAt = time.Now().UTC()
 			metrics.JobsCompleted.Inc()
-			metrics.JobDuration.WithLabelValues(Recievedjob.Type, "completed").Observe(duration)
+			metrics.JobDuration.WithLabelValues(received.Type, "completed").Observe(duration)
+			_ = w.Store.Save(ctx, received)
 
-			_ = w.Queue.SaveJob(ctx, Recievedjob)
-
-			if Recievedjob.IdempotencyKey != "" {
-				fullKey := Recievedjob.Type + ":" + Recievedjob.IdempotencyKey
-				if err := w.Queue.MarkProcessed(ctx, fullKey); err != nil {
-					logger.Log.Error("Failed to mark job as processed",
-						"job", Recievedjob.ID,
-						"key", fullKey,
-						"error", err,
-					)
-
+			if received.IdempotencyKey != "" {
+				if idemp, ok := w.Queue.(broker.IdempotencyStore); ok {
+					fullKey := received.Type + ":" + received.IdempotencyKey
+					if err := idemp.MarkProcessed(ctx, fullKey); err != nil {
+						logger.Log.Error(
+							"Failed to mark job as processed",
+							"job", received.ID, 
+							"key", fullKey, 
+							"error", err)
+					}
 				}
 			}
 
-			if err = w.Queue.ACK(ctx, Recievedjob.ID); err != nil {
+			if err = w.Queue.ACK(ctx, received.ID); err != nil {
 				logger.Log.Error(
-					"Failed to Ack job",
-					"Job ID", Recievedjob.ID,
+					"Failed to Ack job", 
+					"Job ID", received.ID, 
 					"error", err,
 				)
 			}
-
 			logger.Log.Info(
-				"job processed succesful",
-				"worker", w.ID,
-				"job", Recievedjob.ID,
-				"Status", Recievedjob.Status,
+				"job processed successful",
+				"worker", w.ID, 
+				"job", received.ID, 
+				"Status", received.Status,
 			)
 		}
 	}
 }
 
 func (w *Worker) heartbeat(ctx context.Context, jobID string, timeOut time.Duration) {
+	ext, ok := w.Queue.(broker.VisibilityExtender)
+	if !ok {
+		return
+	}
 
 	interval := timeOut / 3
 	if interval < 2*time.Second {
 		interval = 2 * time.Second
 	}
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -332,19 +290,21 @@ func (w *Worker) heartbeat(ctx context.Context, jobID string, timeOut time.Durat
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := w.Queue.ExtendVisibility(ctx, jobID, timeOut); err != nil {
-				logger.Log.Error("Heartbeat failed",
-					"worker", w.ID,
-					"job", jobID,
+			if err := ext.ExtendVisibility(ctx, jobID, timeOut); err != nil {
+				logger.Log.Error(
+					"Heartbeat failed",
+					"worker", w.ID, 
+					"job", jobID, 
 					"error", err,
 				)
 				continue
 			}
 			metrics.JobsHeartbeat.Inc()
-			logger.Log.Debug("Heartbeat sent",
-				"worker", w.ID,
-				"job", jobID,
-			)
+			logger.Log.Debug(
+			"Heartbeat sent", 
+			"worker", w.ID, 
+			"job", jobID,
+		)
 		}
 	}
 }

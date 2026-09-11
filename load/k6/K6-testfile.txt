@@ -1,0 +1,8 @@
+# CI / quick
+k6 run -e BASE_URL=http://127.0.0.1:8080 -e PROFILE=smoke load/k6/enqueue.js
+
+# Normal confidence (~50 → 300 RPS stages)
+k6 run -e BASE_URL=http://127.0.0.1:8080 -e PROFILE=sustained load/k6/enqueue.js
+
+# Find the cliff on this machine
+k6 run -e BASE_URL=http://127.0.0.1:8080 -e PROFILE=stress load/k6/enqueue.js

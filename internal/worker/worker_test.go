@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"distributed-job-system/internal/jobs"
+	"distributed-job-system/internal/jobservice"
 	"distributed-job-system/internal/queue"
 	"encoding/json"
 	"testing"
@@ -79,8 +80,9 @@ func TestNewWorkerAndStartProcessesJob(t *testing.T) {
 	reg := NewRegistry()
 	// Use real PrintHandler or okHandler
 	reg.Register("print", &PrintHandler{})
+	jobS := jobservice.New(q,q)
 
-	w := NewWorker(1, q, 3)
+	w := NewWorker(1, jobS.Queue, jobS.Store, 3)
 	require.Equal(t, 1, w.ID)
 
 	go w.Start(ctx, reg, 30)
@@ -114,7 +116,9 @@ func TestHeartbeatExtendsVisibility(t *testing.T) {
 		Member: jobID,
 	}).Err())
 
-	w := NewWorker(1, q, 3)
+	jobS := jobservice.New(q,q)
+
+	w := NewWorker(1, jobS.Queue, jobS.Store, 3)
 	go w.heartbeat(ctx, jobID, 30)
 
 	time.Sleep(100 * time.Millisecond)
@@ -124,4 +128,37 @@ func TestHeartbeatExtendsVisibility(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, score, float64(time.Now().Unix()))
 	cancel()
+}
+
+func TestWorkerHealsMissingStoreOnClaim(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	q := queue.NewRedisQueue(mr.Addr())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	
+	job := jobs.Job{
+		ID:       "heal-1",
+		Type:     "print",
+		Payload:  json.RawMessage(`{}`),
+		Status:   jobs.StatusQueued,
+		Priority: jobs.PriorityDefault,
+	}
+	require.NoError(t, q.Push(ctx, job))
+	// deliberately no SaveJob
+
+	registry := NewRegistry()
+	registry.Register("print", &PrintHandler{})
+
+	w := NewWorker(1, q, q, 3)
+	go w.Start(ctx, registry, 5*time.Second)
+
+	require.Eventually(t, func() bool {
+		stored, err := q.Get(ctx, "heal-1")
+		return err == nil && stored != nil &&
+			(stored.Status == jobs.StatusCompleted || stored.Status == jobs.StatusProcessing)
+	}, 3*time.Second, 50*time.Millisecond)
 }

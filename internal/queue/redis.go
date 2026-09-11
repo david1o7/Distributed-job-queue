@@ -205,6 +205,18 @@ type RedisQueue struct {
 	Client *redis.Client
 }
 
+func (q *RedisQueue) Save(ctx context.Context, job jobs.Job) error {
+	return q.SaveJob(ctx, job)
+}
+
+func (q *RedisQueue) Get(ctx context.Context, id string) (*jobs.Job, error) {
+	return q.GetJob(ctx, id)
+}
+
+func (q *RedisQueue) Close(ctx context.Context) error {
+	return q.Client.Close()
+}
+
 func (q *RedisQueue) IsProcessed(ctx context.Context, key string) (bool, error) {
 	if key == "" {
 		return false, nil

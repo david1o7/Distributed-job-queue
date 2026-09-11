@@ -682,3 +682,116 @@ func TestEmptyPriorityNormalizesToDefault(t *testing.T) {
 	require.Equal(t, jobs.PriorityDefault, jobs.NormalizePriority(""))
 	require.Equal(t, "jobs:default", jobs.QueueKeyFor(""))
 }
+
+func TestStats_PriorityLists(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "h1", Type: "print", Priority: jobs.PriorityHigh}))
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "d1", Type: "print", Priority: jobs.PriorityDefault}))
+	require.NoError(t, q.Push(ctx, jobs.Job{ID: "l1", Type: "print", Priority: jobs.PriorityLow}))
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:processing", redis.Z{
+		Score: float64(time.Now().Add(30 * time.Second).Unix()), Member: "p1",
+	}).Err())
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
+		Score: float64(time.Now().Add(time.Minute).Unix()), Member: "del1",
+	}).Err())
+	require.NoError(t, q.MoveToDeadLetter(ctx, jobs.DeadJob{
+		Job: jobs.Job{ID: "dead1", Type: "print", Status: jobs.StatusFailed},
+		FailureReason: "x", FailedAt: time.Now().UTC(),
+	}))
+
+	st, err := q.Stats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), st.MainDepth)
+	require.Equal(t, int64(1), st.ReadyHigh)
+	require.Equal(t, int64(1), st.ReadyDefault)
+	require.Equal(t, int64(1), st.ReadyLow)
+	require.Equal(t, int64(1), st.Processing)
+	require.Equal(t, int64(1), st.Delayed)
+	require.Equal(t, int64(1), st.DeadLetter)
+}
+
+func TestListDelayedJobs_ReadyFutureOrphan(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	ready := jobs.Job{ID: "d-ready", Type: "print", Status: jobs.StatusRetrying}
+	future := jobs.Job{ID: "d-future", Type: "print", Status: jobs.StatusRetrying}
+	require.NoError(t, q.SaveJob(ctx, ready))
+	require.NoError(t, q.SaveJob(ctx, future))
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
+		Score: float64(time.Now().Add(-time.Minute).Unix()), Member: ready.ID,
+	}).Err())
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
+		Score: float64(time.Now().Add(10 * time.Minute).Unix()), Member: future.ID,
+	}).Err())
+	require.NoError(t, q.Client.ZAdd(ctx, "jobs:delayed", redis.Z{
+		Score: float64(time.Now().Unix()), Member: "orphan-delayed",
+	}).Err())
+
+	items, err := q.ListDelayedJobs(ctx)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+
+	byID := map[string]DelayedJobView{}
+	for _, it := range items {
+		byID[it.Job.ID] = it
+	}
+	require.False(t, byID["d-ready"].Orphan)
+	require.Equal(t, int64(0), byID["d-ready"].ReadyIn)
+	require.Greater(t, byID["d-future"].ReadyIn, int64(0))
+	require.True(t, byID["orphan-delayed"].Orphan)
+}
+
+func TestListDeadJobsPage_Pagination(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	require.NoError(t, q.Client.LPush(ctx, "dead_job", "not-json").Err())
+	for i := 0; i < 3; i++ {
+		require.NoError(t, q.MoveToDeadLetter(ctx, jobs.DeadJob{
+			Job: jobs.Job{
+				ID:     "dead-" + string(rune('0'+i)),
+				Type:   "print",
+				Status: jobs.StatusFailed,
+			},
+			FailureReason: "x",
+			FailedAt:      time.Now().UTC(),
+		}))
+	}
+
+	page, err := q.ListDeadJobsPage(ctx, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), page.Total) // 3 + junk
+	require.LessOrEqual(t, len(page.Items), 2)
+
+	page2, err := q.ListDeadJobsPage(ctx, -1, 0) // clamp
+	require.NoError(t, err)
+	require.Equal(t, int64(0), page2.Start)
+	require.GreaterOrEqual(t, page2.Count, int64(1))
+}
+
+func TestSaveGetClose_JobStoreAliases(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+	q := NewRedisQueue(mr.Addr())
+	ctx := context.Background()
+
+	job := jobs.Job{ID: "s1", Type: "print", Status: jobs.StatusQueued}
+	require.NoError(t, q.Save(ctx, job))
+	got, err := q.Get(ctx, "s1")
+	require.NoError(t, err)
+	require.Equal(t, "s1", got.ID)
+	require.NoError(t, q.Close(ctx))
+}

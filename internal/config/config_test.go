@@ -70,3 +70,30 @@ func TestValidateRejectsEmptyRedis(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err)
 }
+
+func TestLoad_BrokerFromEnv(t *testing.T) {
+	t.Setenv("BROKER", "rabbitmq")
+	t.Setenv("RABBIT_URL", "amqp://guest:guest@localhost:5672/")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "rabbitmq", cfg.Broker)
+	require.Contains(t, cfg.RabbitURL, "amqp://")
+}
+
+func TestValidate_RabbitRequiresURL(t *testing.T) {
+	cfg := defaults()
+	cfg.Broker = "rabbitmq"
+	cfg.RabbitURL = ""
+	err := cfg.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rabbit_url")
+}
+
+func TestValidate_UnknownBroker(t *testing.T) {
+	cfg := defaults()
+	cfg.Broker = "sqs"
+	err := cfg.Validate()
+	require.Error(t, err)
+}

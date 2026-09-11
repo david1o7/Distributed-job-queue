@@ -1,11 +1,12 @@
 
 # Kue — An Evolutionary, Multi-Interface Distributed Job Queue
 
-**Kue** is a distributed job orchestration engine still in progress and written in **Go**, with execution routes over **Redis**, **RabbitMQ**, and **Apache Kafka**, packaged with **Docker** for reproducible ops.  
-It turns “run this work later, safely, under failure” into an explicit systems problem—leases, retries, priorities, and broker trade-offs—not a CRUD demo.
+**Kue** is a distributed job orchestration engine still in progress and written in **Go**, with execution routes over **Redis**, **RabbitMQ**, and **Apache Kafka** with a common interface **Job Service** that contains all the specified functionality a broker must have natively to be able run the orchestration (`Push/Claim/ACK/Nack/Schedule`) and **job Store** which persists job status currently implemented with **Redis** and later **Postgres**, job enqueuing is done with Saving the job state in the job store b4 pushing to Message Broker (Redis/RabbitMQ/Apache Kafka)packaged with **Docker** for reproducible ops.  
+It turns “run this work later, safely, under failure” into an explicit systems problem—leases, retries, priorities, and broker trade-offs.
 
 `61%+ Automated Test Coverage (Unit & Integration)` · `Production-Scale Simulation (k6)` · `Go · Redis · Lua · Docker · Prometheus`
 
+**k6 test** achieved a 13ms p(95) latency with a sustained peak target of 300 Requests Per Second (RPS)
 ---
 
 ## System Architecture for Kue
@@ -20,10 +21,12 @@ It turns “run this work later, safely, under failure” into an explicit syste
 Kue began as a **sandbox**—a place to feel the physics of concurrent workers, network polling, shared state, and what happens when a process dies mid-job. The first version was deliberately small: one queue, one mental model, many sharp edges left visible.
 
 ### Task
+**Caution**: The mentioning of AnyCompany wasn't intended as a real company but as a device to help demonstrate use case of the tool in a real world scenario
+
 The bar moved. The goal became a **robust infrastructure engine** for real concurrency patterns:
 
-- high-throughput work paths in the spirit of **Anytype Finance Crew** (time-critical, failure-intolerant pipelines), and  
-- large parallel job fan-out in the spirit of **Anytype Printing Company** (bulk, prioritized, retryable rendering and processing).
+- high-throughput work paths in the spirit of **AnyCompany Finance Crew** (time-critical, failure-intolerant pipelines), and  
+- large parallel job fan-out in the spirit of **AnyCompany Printing Company** (bulk, prioritized, retryable rendering and processing).
 
 Same product question in both worlds: **accept work fast, execute it out-of-band, survive worker death, and keep operators informed.**
 
@@ -78,6 +81,11 @@ Scripts hit `POST /jobs`, `GET /jobs/{id}`, and `/stats` under ramp profiles. Th
 ---
 
 ## Hard-fought lessons learned
+
+### Challenge → Resolution: k6 sufferring a 504 status code
+**Challenge.** The First k6 run after modifying the job hander and worker interfaces showed **100% status code 504** and —then **80% failures** with checks at the sustained k6 test profile after the initial 20s smoke test.
+
+**Resolution.** RabbitMQ AMPQ channels weren't implemented with mutex locks inorder to avoid race conditions and two or multiple workers trying to get access to it at the same time, so mutex locks where implemented
 
 ### Challenge → Resolution: job priorities vs legacy tests
 **Challenge.** Moving from a single `jobs` list to **`jobs:high|default|low`** was a correct product change—and it **broke the suite**. Tests still asserted `LLEN jobs`. Empty priority normalized the wrong way. Producer type maps ignored explicit `priority`. Reaper/mover destinations and Stats disagreed with Push/Claim.

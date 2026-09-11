@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"distributed-job-system/internal/jobs"
+	"distributed-job-system/internal/logger"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -18,57 +19,139 @@ const (
 	qLow     = "jobs.low"
 	qWait    = "jobs.wait"
 	qDLQ     = "jobs.dlq"
+
+	// Parallel AMQP ops. Raise if CPU/network allow (32–64).
+	defaultPoolSize = 32
 )
 
-type Broker struct {
-	conn *amqp.Connection
-	ch   *amqp.Channel
+type inFlight struct {
+	d  amqp.Delivery
+	ch *amqp.Channel // ACK/Nack MUST use this channel
+}
 
-	mu       sync.Mutex
-	inflight map[string]amqp.Delivery
+type Broker struct {
+	url      string
+	poolSize int
+
+	connMu sync.Mutex
+	conn   *amqp.Connection
+
+	pool chan *amqp.Channel
+
+	flightMu sync.Mutex
+	inflight map[string]inFlight
 }
 
 func New(url string) (*Broker, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, fmt.Errorf("rabbit dial: %w", err)
-	}
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("rabbit channel: %w", err)
-	}
-	if err := ch.Qos(1, 0, false); err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, err
-	}
+	return NewWithPool(url, defaultPoolSize)
+}
 
-	b := &Broker{
-		conn:     conn,
-		ch:       ch,
-		inflight: make(map[string]amqp.Delivery),
+func NewWithPool(url string, poolSize int) (*Broker, error) {
+	if poolSize < 8 {
+		poolSize = 8
 	}
-	if err := b.declareTopology(); err != nil {
-		_ = b.Close(context.Background())
+	b := &Broker{
+		url:      url,
+		poolSize: poolSize,
+		pool:     make(chan *amqp.Channel, poolSize),
+		inflight: make(map[string]inFlight),
+	}
+	if err := b.reconnect(); err != nil {
 		return nil, err
 	}
 	return b, nil
 }
 
-func (b *Broker) declareTopology() error {
-	// Ready queues
+func (b *Broker) reconnect() error {
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+
+	// Drop old pool channels
+	old := b.pool
+	b.pool = make(chan *amqp.Channel, b.poolSize)
+	if old != nil {
+		go drainAndClose(old)
+	}
+	if b.conn != nil {
+		_ = b.conn.Close()
+		b.conn = nil
+	}
+
+	conn, err := amqp.DialConfig(b.url, amqp.Config{
+		Heartbeat: 10 * time.Second,
+		Locale:    "en_US",
+	})
+	if err != nil {
+		return fmt.Errorf("rabbit dial: %w", err)
+	}
+	b.conn = conn
+
+	go func(c *amqp.Connection) {
+		e := <-c.NotifyClose(make(chan *amqp.Error, 1))
+		if e != nil {
+			logger.Log.Error("rabbit connection closed", "error", e)
+		}
+		b.connMu.Lock()
+		if b.conn == c {
+			b.conn = nil
+		}
+		b.connMu.Unlock()
+	}(conn)
+
+	setup, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("rabbit setup channel: %w", err)
+	}
+	if err := declareTopology(setup); err != nil {
+		_ = setup.Close()
+		_ = conn.Close()
+		return err
+	}
+	_ = setup.Close()
+
+	for i := 0; i < b.poolSize; i++ {
+		ch, err := conn.Channel()
+		if err != nil {
+			return fmt.Errorf("rabbit pool channel: %w", err)
+		}
+		if err := ch.Qos(1, 0, false); err != nil {
+			_ = ch.Close()
+			return err
+		}
+		b.pool <- ch
+	}
+	logger.Log.Info("rabbit pool ready", "channels", b.poolSize)
+	return nil
+}
+
+func drainAndClose(pool chan *amqp.Channel) {
+	for {
+		select {
+		case ch, ok := <-pool:
+			if !ok {
+				return
+			}
+			if ch != nil {
+				_ = ch.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
+func declareTopology(ch *amqp.Channel) error {
 	for _, name := range []string{qHigh, qDefault, qLow, qDLQ} {
-		if _, err := b.ch.QueueDeclare(name, true, false, false, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(name, true, false, false, false, nil); err != nil {
 			return fmt.Errorf("declare %s: %w", name, err)
 		}
 	}
-
-	waitArgs := amqp.Table{
+	args := amqp.Table{
 		"x-dead-letter-exchange":    "",
 		"x-dead-letter-routing-key": qDefault,
 	}
-	if _, err := b.ch.QueueDeclare(qWait, true, false, false, false, waitArgs); err != nil {
+	if _, err := ch.QueueDeclare(qWait, true, false, false, false, args); err != nil {
 		return fmt.Errorf("declare %s: %w", qWait, err)
 	}
 	return nil
@@ -85,13 +168,53 @@ func queueFor(p jobs.Priority) string {
 	}
 }
 
+func (b *Broker) borrow(ctx context.Context) (*amqp.Channel, error) {
+	for {
+		b.connMu.Lock()
+		dead := b.conn == nil || b.conn.IsClosed()
+		b.connMu.Unlock()
+		if dead {
+			if err := b.reconnect(); err != nil {
+				return nil, err
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case ch, ok := <-b.pool:
+			if !ok {
+				return nil, fmt.Errorf("rabbit pool closed")
+			}
+			return ch, nil
+		}
+	}
+}
+
+func (b *Broker) release(ch *amqp.Channel) {
+	if ch == nil {
+		return
+	}
+	select {
+	case b.pool <- ch:
+	default:
+		_ = ch.Close()
+	}
+}
+
 func (b *Broker) Push(ctx context.Context, job jobs.Job) error {
 	job.Priority = jobs.NormalizePriority(job.Priority)
 	body, err := json.Marshal(job)
 	if err != nil {
 		return err
 	}
-	return b.ch.PublishWithContext(ctx, "", queueFor(job.Priority), false, false, amqp.Publishing{
+
+	ch, err := b.borrow(ctx)
+	if err != nil {
+		return err
+	}
+	
+	err = ch.PublishWithContext(ctx, "", queueFor(job.Priority), false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		MessageId:    job.ID,
@@ -102,6 +225,12 @@ func (b *Broker) Push(ctx context.Context, job jobs.Job) error {
 			"priority": string(job.Priority),
 		},
 	})
+	if err != nil {
+		_ = ch.Close() // do not recycle a broken channel
+		return err
+	}
+	b.release(ch)
+	return nil
 }
 
 func (b *Broker) Claim(ctx context.Context, visibilityTimeout time.Duration) (*jobs.Job, error) {
@@ -114,62 +243,80 @@ func (b *Broker) Claim(ctx context.Context, visibilityTimeout time.Duration) (*j
 		default:
 		}
 
+		ch, err := b.borrow(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		var (
+			d  amqp.Delivery
+			ok bool
+		)
 		for _, qn := range []string{qHigh, qDefault, qLow} {
-			d, ok, err := b.ch.Get(qn, false) // autoAck=false
+			d, ok, err = ch.Get(qn, false)
 			if err != nil {
+				_ = ch.Close()
 				return nil, err
 			}
-			if !ok {
-				continue
+			if ok {
+				break
 			}
-
-			var job jobs.Job
-			if err := json.Unmarshal(d.Body, &job); err != nil {
-				// Poison: do not requeue
-				_ = d.Nack(false, false)
-				return nil, fmt.Errorf("invalid job payload: %w", err)
-			}
-			job.Priority = jobs.NormalizePriority(job.Priority)
-
-			b.mu.Lock()
-			b.inflight[job.ID] = d
-			b.mu.Unlock()
-
-			return &job, nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(150 * time.Millisecond):
+		if !ok {
+			b.release(ch)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+			}
+			continue
 		}
+
+		var job jobs.Job
+		if err := json.Unmarshal(d.Body, &job); err != nil {
+			_ = d.Nack(false, false)
+			b.release(ch)
+			return nil, fmt.Errorf("invalid job payload: %w", err)
+		}
+		job.Priority = jobs.NormalizePriority(job.Priority)
+
+		// Keep channel until ACK/Nack (same-channel rule).
+		b.flightMu.Lock()
+		b.inflight[job.ID] = inFlight{d: d, ch: ch}
+		b.flightMu.Unlock()
+		return &job, nil
 	}
 }
 
 func (b *Broker) ACK(ctx context.Context, jobID string) error {
-	b.mu.Lock()
-	d, ok := b.inflight[jobID]
+	b.flightMu.Lock()
+	ref, ok := b.inflight[jobID]
 	if ok {
 		delete(b.inflight, jobID)
 	}
-	b.mu.Unlock()
+	b.flightMu.Unlock()
 	if !ok {
 		return nil
 	}
-	return d.Ack(false)
+	err := ref.d.Ack(false)
+	b.release(ref.ch)
+	return err
 }
 
 func (b *Broker) Nack(ctx context.Context, job jobs.Job) error {
-	b.mu.Lock()
-	d, ok := b.inflight[job.ID]
+	b.flightMu.Lock()
+	ref, ok := b.inflight[job.ID]
 	if ok {
 		delete(b.inflight, job.ID)
 	}
-	b.mu.Unlock()
+	b.flightMu.Unlock()
 	if !ok {
 		return b.Push(ctx, job)
 	}
-	return d.Nack(false, true)
+	err := ref.d.Nack(false, true)
+	b.release(ref.ch)
+	return err
 }
 
 func (b *Broker) Schedule(ctx context.Context, job jobs.Job, delay time.Duration) error {
@@ -185,73 +332,71 @@ func (b *Broker) Schedule(ctx context.Context, job jobs.Job, delay time.Duration
 		return err
 	}
 
-	exp := fmt.Sprintf("%d", delay.Milliseconds())
-	return b.ch.PublishWithContext(ctx, "", qWait, false, false, amqp.Publishing{
+	ch, err := b.borrow(ctx)
+	if err != nil {
+		return err
+	}
+	err = ch.PublishWithContext(ctx, "", qWait, false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		MessageId:    job.ID,
 		Body:         body,
-		Expiration:   exp,
+		Expiration:   fmt.Sprintf("%d", delay.Milliseconds()),
 		Headers: amqp.Table{
 			"job_type": string(job.Type),
 			"priority": string(job.Priority),
 		},
 	})
+	if err != nil {
+		_ = ch.Close()
+		return err
+	}
+	b.release(ch)
+	return nil
 }
 
 func (b *Broker) MoveToDeadLetter(ctx context.Context, dead jobs.DeadJob) error {
-	_ = b.ACK(ctx, dead.ID)
+	id := dead.ID
+	if id == "" {
+		id = dead.ID
+	}
+	_ = b.ACK(ctx, id)
+
 	body, err := json.Marshal(dead)
 	if err != nil {
 		return err
 	}
-	return b.ch.PublishWithContext(ctx, "", qDLQ, false, false, amqp.Publishing{
+	ch, err := b.borrow(ctx)
+	if err != nil {
+		return err
+	}
+	err = ch.PublishWithContext(ctx, "", qDLQ, false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
-		MessageId:    dead.ID,
+		MessageId:    id,
 		Body:         body,
 	})
-}
-
-func (b *Broker) Close(ctx context.Context) error {
-	b.mu.Lock()
-	b.inflight = map[string]amqp.Delivery{}
-	b.mu.Unlock()
-	if b.ch != nil {
-		_ = b.ch.Close()
+	if err != nil {
+		_ = ch.Close()
+		return err
 	}
-	if b.conn != nil {
-		return b.conn.Close()
-	}
+	b.release(ch)
 	return nil
 }
 
-func (b *Broker) ReplayDeadJob(ctx context.Context, id string) (*jobs.Job, error) {
-	for {
-		d, ok, err := b.ch.Get(qDLQ, false)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("not found")
-		}
-		var dead jobs.DeadJob
-		if err := json.Unmarshal(d.Body, &dead); err != nil {
-			_ = d.Nack(false, false)
-			continue
-		}
-		if dead.ID != id {
+func (b *Broker) Close(ctx context.Context) error {
+	b.flightMu.Lock()
+	b.inflight = map[string]inFlight{}
+	b.flightMu.Unlock()
 
-			_ = d.Nack(false, true)
-			return nil, fmt.Errorf("not found in head scan; improve with index")
-		}
-		_ = d.Ack(false)
-		job := dead.Job
-		job.Status = jobs.StatusQueued
-		job.RetryCount = 0
-		if err := b.Push(ctx, job); err != nil {
-			return nil, err
-		}
-		return &job, nil
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+
+	drainAndClose(b.pool)
+	if b.conn != nil {
+		err := b.conn.Close()
+		b.conn = nil
+		return err
 	}
+	return nil
 }
