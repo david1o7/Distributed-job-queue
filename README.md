@@ -1,17 +1,12 @@
 
 # Kue — An Evolutionary, Multi-Interface Distributed Job Queue
-Kue is a distributed job orchestration engine built in Go that transforms asynchronous task execution into an explicit systems problem. It simplifies complex background processing by natively managing leases, retries, priorities, and broker trade-offs, turning the challenge of "run this work later, safely, under failure" into a reliable, declarative operation.
+**Kue** is a distributed job orchestration engine still in progress but written in **Go**, with execution routes over **Redis**, **RabbitMQ** fully supported and **Apache Kafka** (in progress) with a common interface **Job Service** that contains all the specified functionality a broker must have natively to be able run the orchestration (`Push/Claim/ACK/Nack/Schedule`).
 
-## Core Architecture
+ **job Store** which persists job status currently implemented with **Redis** and later an implemented **Postgres**, 
+ 
+ job enqueuing is done with Saving the job state in the job store before pushing to Message Broker (Redis/RabbitMQ/Apache Kafka) and packaged with **Docker** for reproducible ops.
 
-* Unified Interface: The core JobService abstracts the native capabilities required by a broker, strictly enforcing standard orchestration semantics: Push, Claim, ACK, Nack, and Schedule.
-* Pluggable Message Brokers: Execution routes are driven via interchangeable backends, currently supporting Redis, RabbitMQ, and Apache Kafka.
-* Dual-Layer Persistence: Reliability is guaranteed by a JobStore that saves the job state before it is ever pushed to the message broker. This layer is currently backed by Redis, with a PostgreSQL implementation in progress.
-
-## Project Status & Operations
-
-* 🛠️ Status: Currently in active development (Work in Progress).
-* 🐋 Ops-Ready: Fully packaged with Docker for predictable, reproducible deployments across environments.
+It turns “run this work later, safely, under failure” into an explicit systems problem—leases, retries, priorities, and broker trade-offs.
 
 `61%+ Automated Test Coverage (Unit & Integration)` · `Production-Scale Simulation (k6)` · `Go · Redis · Lua · Docker · Prometheus`
 
